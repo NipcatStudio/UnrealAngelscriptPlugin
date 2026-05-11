@@ -7,9 +7,91 @@
 
 DECLARE_MULTICAST_DELEGATE_OneParam(FOnAngelscriptPreprocessHook, struct FAngelscriptPreprocessor&);
 
+struct ANGELSCRIPTRUNTIME_API FAngelscriptPreprocessorContext
+{
+	TMap<FString, bool> PreprocessorFlags;
+
+	bool bUseAutomaticImportMethod = false;
+	bool bWarnOnManualImportStatements = true;
+	bool bDefaultFunctionBlueprintCallable = true;
+	EAngelscriptPropertyEditSpecifier DefaultPropertyEditSpecifier = EAngelscriptPropertyEditSpecifier::EditAnywhere;
+	EAngelscriptPropertyEditSpecifier DefaultPropertyEditSpecifierForStructs = EAngelscriptPropertyEditSpecifier::EditAnywhere;
+	EAngelscriptPropertyBlueprintSpecifier DefaultPropertyBlueprintSpecifier = EAngelscriptPropertyBlueprintSpecifier::BlueprintReadWrite;
+	EAngelscriptStaticClassMode StaticClassDeprecation = EAngelscriptStaticClassMode::Allowed;
+	bool bScriptFloatIsFloat64 = true;
+
+	static FAngelscriptPreprocessorContext CreateFromCurrentEngineContext();
+};
+
+enum class EAngelscriptPreprocessorSummaryStage : uint8
+{
+	Unknown,
+	ProcessChunks,
+	PostProcessCode,
+	Completed,
+};
+
+struct ANGELSCRIPTRUNTIME_API FAngelscriptPreprocessorFileSummary
+{
+	FString RelativeFilename;
+	FString AbsoluteFilename;
+	FString ModuleName;
+
+	int32 RawCodeCharacterCount = 0;
+	int32 ChunkCount = 0;
+	int32 ImportCount = 0;
+	int32 ClassCount = 0;
+	int32 StructCount = 0;
+	int32 EnumCount = 0;
+	int32 DelegateCount = 0;
+	int32 FunctionCount = 0;
+	int32 PropertyCount = 0;
+	int32 GeneratedCodeSectionCount = 0;
+	int32 GeneratedCodeCharacterCount = 0;
+	int32 ProcessedCodeCharacterCount = 0;
+
+	TArray<FString> ImportedModuleNames;
+	TArray<FString> ClassNames;
+	TArray<FString> FunctionNames;
+	TArray<FString> PropertyNames;
+	TArray<FString> EnumNames;
+	TArray<FString> DelegateNames;
+};
+
+struct ANGELSCRIPTRUNTIME_API FAngelscriptPreprocessorSummary
+{
+	EAngelscriptPreprocessorSummaryStage Stage = EAngelscriptPreprocessorSummaryStage::Unknown;
+	bool bSucceeded = false;
+	bool bHasError = false;
+
+	int32 FileCount = 0;
+	int32 ModuleCount = 0;
+	int32 ChunkCount = 0;
+	int32 ImportCount = 0;
+	int32 ClassCount = 0;
+	int32 StructCount = 0;
+	int32 EnumCount = 0;
+	int32 DelegateCount = 0;
+	int32 FunctionCount = 0;
+	int32 PropertyCount = 0;
+	int32 GeneratedCodeSectionCount = 0;
+	int32 GeneratedCodeCharacterCount = 0;
+	int32 ProcessedCodeCharacterCount = 0;
+
+	TArray<FString> ModuleNames;
+	TArray<FString> ImportedModuleNames;
+	TArray<FString> ClassNames;
+	TArray<FString> FunctionNames;
+	TArray<FString> PropertyNames;
+	TArray<FString> EnumNames;
+	TArray<FString> DelegateNames;
+	TArray<FAngelscriptPreprocessorFileSummary> Files;
+};
+
 struct ANGELSCRIPTRUNTIME_API FAngelscriptPreprocessor
 {
 	FAngelscriptPreprocessor();
+	explicit FAngelscriptPreprocessor(const FAngelscriptPreprocessorContext& InContext);
 
 	/* Add a file to be preprocessed. */
 	void AddFile(const FString& ScriptRelativePath, const FString& ScriptAbsoluteFilename, bool bLoadAsynchronous = false, bool bTreatAsDeleted = false);
@@ -19,6 +101,9 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptPreprocessor
 
 	/* Retrieve preprocessed modules to pass into compilation. */
 	TArray<TSharedRef<FAngelscriptModuleDesc>> GetModulesToCompile();
+
+	/* Retrieve a read-only value summary of the current preprocessing state. */
+	FAngelscriptPreprocessorSummary GetSummary() const;
 
 	/* List of preprocessor flags that can be used in #if statements. */
 	TMap<FString, bool> PreprocessorFlags;
@@ -168,6 +253,7 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptPreprocessor
 	bool bIsPreprocessed = false;
 	bool bHasError = false;
 	bool bLoadingAnyFilesAsynchronous = false;
+	EAngelscriptPreprocessorSummaryStage CurrentSummaryStage = EAngelscriptPreprocessorSummaryStage::Unknown;
 
 	void PerformAsynchronousLoads();
 
@@ -175,6 +261,10 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptPreprocessor
 	EAngelscriptPropertyEditSpecifier DefaultPropertyEditSpecifier;
 	EAngelscriptPropertyEditSpecifier DefaultPropertyEditSpecifierForStructs;
 	EAngelscriptPropertyBlueprintSpecifier DefaultPropertyBlueprintSpecifier;
+	bool bUseAutomaticImportMethod;
+	bool bWarnOnManualImportStatements;
+	EAngelscriptStaticClassMode StaticClassDeprecation;
+	bool bScriptFloatIsFloat64;
 
 	TArray<FFile> Files;
 	TMap<FString, TSharedPtr<FAngelscriptClassDesc>> PreprocessingClasses;
@@ -251,5 +341,4 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptPreprocessor
 
 	FString GetPushArgumentSuffix(const FString& Type);
 
-	UAngelscriptSettings* ConfigSettings;
 };

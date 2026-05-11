@@ -17,8 +17,6 @@ namespace CompilerPipelineClassLikeExecutionTest
 	static const FName VerifyFunctionName(TEXT("VerifyRoundTrip"));
 }
 
-using namespace CompilerPipelineClassLikeExecutionTest;
-
 TEST_CLASS_WITH_FLAGS(FCompilerPipelineClassLikeExecutionTests,
 	"Angelscript.TestModule.Compiler.EndToEnd",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

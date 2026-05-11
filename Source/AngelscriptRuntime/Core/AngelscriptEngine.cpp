@@ -8,6 +8,8 @@
 #include "ClassGenerator/ASClass.h"
 #include "ClassGenerator/ASStruct.h"
 #include "Debugging/AngelscriptDebugServer.h"
+#include "Compilation/AngelscriptCompilationContext.h"
+#include "Compilation/AngelscriptCompilationEvents.h"
 
 #include "HAL/FileManager.h"
 #include "Misc/Paths.h"
@@ -85,6 +87,109 @@ bool FAngelscriptEngine::bStaticJITTranspiledCodeLoaded = false;
 
 static int32 GAngelscriptRecompileAvoidance = 1;
 static FAutoConsoleVariableRef CVar_AngelscriptRecompileAvoidance(TEXT("angelscript.UseRecompileAvoidance"), GAngelscriptRecompileAvoidance, TEXT(""));
+
+namespace AngelscriptEngineCompilationEvents_Private
+{
+	void AddModuleSummary(FAngelscriptCompilationEvent& Event, const TSharedRef<FAngelscriptModuleDesc>& Module)
+	{
+		Event.ModuleNames.AddUnique(Module->ModuleName);
+		for (const FAngelscriptModuleDesc::FCodeSection& Section : Module->Code)
+		{
+			Event.FileNames.AddUnique(Section.RelativeFilename);
+		}
+
+		for (const FString& ImportedModuleName : Module->ImportedModules)
+		{
+			Event.ImportedModuleNames.AddUnique(ImportedModuleName);
+		}
+
+		Event.ImportCount += Module->ImportedModules.Num();
+		Event.ClassCount += Module->Classes.Num();
+		for (const TSharedRef<FAngelscriptClassDesc>& ClassDesc : Module->Classes)
+		{
+			Event.FunctionCount += ClassDesc->Methods.Num();
+		}
+
+		Event.bLoadedPrecompiledCode |= Module->bLoadedPrecompiledCode;
+	}
+
+	void FinalizeModuleCounts(FAngelscriptCompilationEvent& Event)
+	{
+		Event.ModuleCount = Event.ModuleNames.Num();
+		Event.FileCount = Event.FileNames.Num();
+	}
+
+	void AddModulesSummary(FAngelscriptCompilationEvent& Event, const TArray<TSharedRef<FAngelscriptModuleDesc>>& Modules)
+	{
+		for (const TSharedRef<FAngelscriptModuleDesc>& Module : Modules)
+		{
+			AddModuleSummary(Event, Module);
+		}
+		FinalizeModuleCounts(Event);
+	}
+
+	void AddDiagnosticSummary(FAngelscriptCompilationEvent& Event, const TMap<FString, FAngelscriptEngine::FDiagnostics>& Diagnostics)
+	{
+		for (const TPair<FString, FAngelscriptEngine::FDiagnostics>& DiagnosticSet : Diagnostics)
+		{
+			for (const FAngelscriptEngine::FDiagnostic& Diagnostic : DiagnosticSet.Value.Diagnostics)
+			{
+				++Event.DiagnosticCount;
+				Event.Messages.Add(Diagnostic.Message);
+			}
+		}
+	}
+
+	void BroadcastCompileEvent(
+		EAngelscriptCompilationEventType EventType,
+		FName Phase,
+		uint64 CompilationRunId,
+		ECompileType CompileType,
+		const TArray<TSharedRef<FAngelscriptModuleDesc>>& Modules)
+	{
+		if (!FAngelscriptCompilationEvents::HasListeners())
+		{
+			return;
+		}
+
+		FAngelscriptCompilationEvent Event;
+		Event.Type = EventType;
+		Event.Phase = Phase;
+		Event.CompilationRunId = CompilationRunId;
+		Event.CompileType = CompileType;
+		AddModulesSummary(Event, Modules);
+		FAngelscriptCompilationEvents::Broadcast(Event);
+	}
+
+	void BroadcastModuleEvent(
+		EAngelscriptCompilationEventType EventType,
+		FName Phase,
+		uint64 CompilationRunId,
+		ECompileType CompileType,
+		const TSharedRef<FAngelscriptModuleDesc>& Module,
+		bool bSucceeded,
+		bool bJitAvailable = false,
+		bool bJitHandoff = false)
+	{
+		if (!FAngelscriptCompilationEvents::HasListeners())
+		{
+			return;
+		}
+
+		FAngelscriptCompilationEvent Event;
+		Event.Type = EventType;
+		Event.Phase = Phase;
+		Event.CompilationRunId = CompilationRunId;
+		Event.CompileType = CompileType;
+		Event.bSucceeded = bSucceeded;
+		Event.bFailed = !bSucceeded;
+		Event.bJitAvailable = bJitAvailable;
+		Event.bJitHandoff = bJitHandoff;
+		AddModuleSummary(Event, Module);
+		FinalizeModuleCounts(Event);
+		FAngelscriptCompilationEvents::Broadcast(Event);
+	}
+}
 
 static UObject* GAmbientWorldContext = nullptr;
 class asCThreadLocalData* FAngelscriptEngine::GameThreadTLD = nullptr;
@@ -3340,6 +3445,18 @@ TSharedPtr<struct FAngelscriptModuleDesc> FAngelscriptEngine::GetModuleByFilenam
 ECompileResult FAngelscriptEngine::CompileModules(ECompileType CompileType, const TArray<TSharedRef<struct FAngelscriptModuleDesc>>& InModules, TArray<TSharedRef<FAngelscriptModuleDesc>>& OutCompiledModules)
 {
 	AS_PERF_SCOPE_COMPILE_MODULES();
+	FAngelscriptCompilationContext CompilationContext(CompileType, InModules);
+
+	if (FAngelscriptCompilationEvents::HasListeners())
+	{
+		FAngelscriptCompilationEvent BeginEvent;
+		BeginEvent.Type = EAngelscriptCompilationEventType::CompileBegin;
+		BeginEvent.Phase = TEXT("Compile.Begin");
+		BeginEvent.CompilationRunId = CompilationContext.GetRunId();
+		BeginEvent.CompileType = CompilationContext.GetCompileType();
+		CompilationContext.PopulateInputSummary(BeginEvent);
+		FAngelscriptCompilationEvents::Broadcast(BeginEvent);
+	}
 
 	// We allocate from the memstack in the script compiler, so use a MemMark to deallocate everything at the end
 	FMemMark MemoryMark(FMemStack::Get());
@@ -3488,6 +3605,14 @@ ECompileResult FAngelscriptEngine::CompileModules(ECompileType CompileType, cons
 					{
 						CompileModule_Types_Stage1(CompileType, Module, ImportedModules);
 					}
+
+					AngelscriptEngineCompilationEvents_Private::BroadcastModuleEvent(
+						EAngelscriptCompilationEventType::CompileModuleAssembly,
+						TEXT("Compile.ModuleAssembly"),
+						CompilationContext.GetRunId(),
+						CompileType,
+						Module,
+						!Module->bCompileError);
 				}
 
 				// In parallel, parse the script code
@@ -3518,6 +3643,24 @@ ECompileResult FAngelscriptEngine::CompileModules(ECompileType CompileType, cons
 					}
 				});
 
+				for (int i = 0, Count = CurrentCompileList.Num(); i < Count; ++i)
+				{
+					auto Module = CurrentCompileList[i];
+					asCModule* ScriptModule = Module->ScriptModule;
+					if (ScriptModule == nullptr)
+						continue;
+					if (Module->bLoadedPrecompiledCode)
+						continue;
+
+					AngelscriptEngineCompilationEvents_Private::BroadcastModuleEvent(
+						EAngelscriptCompilationEventType::CompileModuleParse,
+						TEXT("Compile.ModuleParse"),
+						CompilationContext.GetRunId(),
+						CompileType,
+						Module,
+						!Module->bCompileError);
+				}
+
 				// Now that everything is parsed, generate the actual types
 				for (auto Module : CompiledModules)
 				{
@@ -3536,6 +3679,14 @@ ECompileResult FAngelscriptEngine::CompileModules(ECompileType CompileType, cons
 						Module->bCompileError = true;
 						bHadCompileErrors = true;
 					}
+
+					AngelscriptEngineCompilationEvents_Private::BroadcastModuleEvent(
+						EAngelscriptCompilationEventType::CompileModuleGenerateTypes,
+						TEXT("Compile.ModuleGenerateTypes"),
+						CompilationContext.GetRunId(),
+						CompileType,
+						Module,
+						!Module->bCompileError);
 				}
 
 				// If parsing failed on one of our modules during a hotreload,
@@ -3559,6 +3710,14 @@ ECompileResult FAngelscriptEngine::CompileModules(ECompileType CompileType, cons
 
 					// Perform stage 2 of compilation
 					CompileModule_Functions_Stage2(CompileType, Module);
+
+					AngelscriptEngineCompilationEvents_Private::BroadcastModuleEvent(
+						EAngelscriptCompilationEventType::CompileModuleGenerateFunctions,
+						TEXT("Compile.ModuleGenerateFunctions"),
+						CompilationContext.GetRunId(),
+						CompileType,
+						Module,
+						!Module->bCompileError);
 
 					// Cancel out on a compile error if we're
 					// doing a hot-reload compile.
@@ -4054,6 +4213,23 @@ ECompileResult FAngelscriptEngine::CompileModules(ECompileType CompileType, cons
 				if (Result != asSUCCESS)
 					Module->bCompileError = true;
 			}
+
+			for (auto Module : CompiledModules)
+			{
+				asCModule* ScriptModule = Module->ScriptModule;
+				if (ScriptModule == nullptr)
+					continue;
+				if (Module->bLoadedPrecompiledCode)
+					continue;
+
+				AngelscriptEngineCompilationEvents_Private::BroadcastModuleEvent(
+					EAngelscriptCompilationEventType::CompileModuleLayout,
+					TEXT("Compile.ModuleLayout"),
+					CompilationContext.GetRunId(),
+					CompileType,
+					Module,
+					!Module->bCompileError);
+			}
 		}
 
 		// It should be visible which modules are compiling during a hotreload
@@ -4088,8 +4264,20 @@ ECompileResult FAngelscriptEngine::CompileModules(ECompileType CompileType, cons
 					ProgressUpdatesDone += 1;
 				}
 
+				const bool bJitAvailable = ScriptEngine != nullptr && ScriptEngine->GetJITCompiler() != nullptr;
+
 				// Perform stage 3 of compilation
 				CompileModule_Code_Stage3(CompileType, Module);
+
+				AngelscriptEngineCompilationEvents_Private::BroadcastModuleEvent(
+					EAngelscriptCompilationEventType::CompileModuleCompileCode,
+					TEXT("Compile.ModuleCompileCode"),
+					CompilationContext.GetRunId(),
+					CompileType,
+					Module,
+					!Module->bCompileError,
+					bJitAvailable,
+					bJitAvailable && !Module->bCompileError && !Module->bLoadedPrecompiledCode);
 
 				// Cancel out on a compile error if we're
 				// doing a hot-reload compile.
@@ -4130,6 +4318,14 @@ ECompileResult FAngelscriptEngine::CompileModules(ECompileType CompileType, cons
 
 					// Perform stage 4 of compilation
 					CompileModule_Globals_Stage4(CompileType, Module);
+
+					AngelscriptEngineCompilationEvents_Private::BroadcastModuleEvent(
+						EAngelscriptCompilationEventType::CompileModuleGlobals,
+						TEXT("Compile.ModuleGlobals"),
+						CompilationContext.GetRunId(),
+						CompileType,
+						Module,
+						!Module->bCompileError);
 
 					// Cancel out on a compile error if we're
 					// doing a hot-reload compile.
@@ -4177,6 +4373,12 @@ ECompileResult FAngelscriptEngine::CompileModules(ECompileType CompileType, cons
 		FAngelscriptClassGenerator ClassGenerator;
 
 		// Run the delegate that the game might hook to provide more errors/warnings
+		AngelscriptEngineCompilationEvents_Private::BroadcastCompileEvent(
+			EAngelscriptCompilationEventType::CompileClassGenerationHandoff,
+			TEXT("Compile.ClassGenerationHandoff"),
+			CompilationContext.GetRunId(),
+			CompileType,
+			CompiledModules);
 		FAngelscriptRuntimeModule::GetPreGenerateClasses().Broadcast(CompiledModules);
 
 		for (auto Module : CompiledModules)
@@ -4468,7 +4670,21 @@ ECompileResult FAngelscriptEngine::CompileModules(ECompileType CompileType, cons
 		}
 	}
 
+	CompilationContext.CaptureCompiledModules(CompiledModules);
+	CompilationContext.SetResult(Result);
 	OutCompiledModules = MoveTemp(CompiledModules);
+
+	if (FAngelscriptCompilationEvents::HasListeners())
+	{
+		FAngelscriptCompilationEvent EndEvent;
+		EndEvent.Type = EAngelscriptCompilationEventType::CompileEnd;
+		EndEvent.Phase = TEXT("Compile.End");
+		CompilationContext.PopulateResult(EndEvent);
+		CompilationContext.PopulateInputSummary(EndEvent);
+		AngelscriptEngineCompilationEvents_Private::AddDiagnosticSummary(EndEvent, Diagnostics);
+
+		FAngelscriptCompilationEvents::Broadcast(EndEvent);
+	}
 
 	return Result;
 }

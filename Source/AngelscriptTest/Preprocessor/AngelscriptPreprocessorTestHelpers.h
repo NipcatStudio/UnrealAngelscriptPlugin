@@ -300,6 +300,40 @@ namespace PreprocessorTestHelpers
 		}
 	}
 
+	inline void AddFilesToPreprocessor(
+		FAngelscriptPreprocessor& Preprocessor,
+		TArrayView<const FFixtureFile* const> Files,
+		TArray<FString>& OutAbsoluteFilenames)
+	{
+		OutAbsoluteFilenames.Reserve(Files.Num());
+		for (const FFixtureFile* File : Files)
+		{
+			Preprocessor.AddFile(File->RelativePath, File->AbsolutePath);
+			OutAbsoluteFilenames.Add(File->AbsolutePath);
+		}
+	}
+
+	/** Run preprocessing on multiple fixture files with optional flag overrides.
+	 *  Handles engine diagnostic reset, AddFile, Preprocess, and diagnostic collection. */
+	inline FPreprocessResult RunPreprocess(
+		FAngelscriptEngine& Engine,
+		TArrayView<const FFixtureFile* const> Files,
+		const FAngelscriptPreprocessorContext& Context)
+	{
+		Engine.ResetDiagnostics();
+
+		FAngelscriptPreprocessor Preprocessor(Context);
+
+		TArray<FString> AbsoluteFilenames;
+		AddFilesToPreprocessor(Preprocessor, Files, AbsoluteFilenames);
+
+		FPreprocessResult Result;
+		Result.bSuccess = Preprocessor.Preprocess();
+		Result.Modules = Preprocessor.GetModulesToCompile();
+		AppendEngineDiagnostics(Engine, AbsoluteFilenames, Result);
+		return Result;
+	}
+
 	/** Run preprocessing on multiple fixture files with optional flag overrides.
 	 *  Handles engine diagnostic reset, AddFile, Preprocess, and diagnostic collection. */
 	inline FPreprocessResult RunPreprocess(
@@ -325,14 +359,8 @@ namespace PreprocessorTestHelpers
 			Preprocessor.PreprocessorFlags.Add(Flag.Key, Flag.Value);
 		}
 
-		// Add all files
 		TArray<FString> AbsoluteFilenames;
-		AbsoluteFilenames.Reserve(Files.Num());
-		for (const FFixtureFile* File : Files)
-		{
-			Preprocessor.AddFile(File->RelativePath, File->AbsolutePath);
-			AbsoluteFilenames.Add(File->AbsolutePath);
-		}
+		AddFilesToPreprocessor(Preprocessor, Files, AbsoluteFilenames);
 
 		FPreprocessResult Result;
 		Result.bSuccess = Preprocessor.Preprocess();
@@ -345,11 +373,36 @@ namespace PreprocessorTestHelpers
 	inline FPreprocessResult RunPreprocess(
 		FAngelscriptEngine& Engine,
 		const FFixtureFile& File,
+		const FAngelscriptPreprocessorContext& Context)
+	{
+		const FFixtureFile* FilePtr = &File;
+		return RunPreprocess(Engine, MakeArrayView(&FilePtr, 1), Context);
+	}
+
+	/** Single-file convenience overload. */
+	inline FPreprocessResult RunPreprocess(
+		FAngelscriptEngine& Engine,
+		const FFixtureFile& File,
 		const TMap<FString, bool>& FlagOverrides = {},
 		bool bDisableAutomaticImports = true)
 	{
 		const FFixtureFile* FilePtr = &File;
 		return RunPreprocess(Engine, MakeArrayView(&FilePtr, 1), FlagOverrides, bDisableAutomaticImports);
+	}
+
+	/** Multi-file convenience overload using TArray<FFixtureFile>. */
+	inline FPreprocessResult RunPreprocess(
+		FAngelscriptEngine& Engine,
+		const TArray<FFixtureFile>& Files,
+		const FAngelscriptPreprocessorContext& Context)
+	{
+		TArray<const FFixtureFile*> Ptrs;
+		Ptrs.Reserve(Files.Num());
+		for (const FFixtureFile& F : Files)
+		{
+			Ptrs.Add(&F);
+		}
+		return RunPreprocess(Engine, MakeArrayView(Ptrs), Context);
 	}
 
 	/** Multi-file convenience overload using TArray<FFixtureFile>. */
@@ -623,6 +676,13 @@ namespace PreprocessorTestHelpers
 	 *  Only needed by a handful of tests that verify macro shapes, chunk types, etc. */
 	struct FPreprocessSession
 	{
+		FPreprocessSession() = default;
+
+		explicit FPreprocessSession(const FAngelscriptPreprocessorContext& Context)
+			: Preprocessor(Context)
+		{
+		}
+
 		FAngelscriptPreprocessor Preprocessor;
 		FPreprocessResult Result;
 
@@ -712,6 +772,25 @@ namespace PreprocessorTestHelpers
 	inline FPreprocessSession RunPreprocessSession(
 		FAngelscriptEngine& Engine,
 		TArrayView<const FFixtureFile* const> Files,
+		const FAngelscriptPreprocessorContext& Context)
+	{
+		Engine.ResetDiagnostics();
+
+		FPreprocessSession Session(Context);
+
+		TArray<FString> AbsoluteFilenames;
+		AddFilesToPreprocessor(Session.Preprocessor, Files, AbsoluteFilenames);
+
+		Session.Result.bSuccess = Session.Preprocessor.Preprocess();
+		Session.Result.Modules = Session.Preprocessor.GetModulesToCompile();
+		AppendEngineDiagnostics(Engine, AbsoluteFilenames, Session.Result);
+		return Session;
+	}
+
+	/** Run preprocessing and keep the preprocessor alive for internal inspection. */
+	inline FPreprocessSession RunPreprocessSession(
+		FAngelscriptEngine& Engine,
+		TArrayView<const FFixtureFile* const> Files,
 		const TMap<FString, bool>& FlagOverrides = {},
 		bool bDisableAutomaticImports = true)
 	{
@@ -732,17 +811,37 @@ namespace PreprocessorTestHelpers
 		}
 
 		TArray<FString> AbsoluteFilenames;
-		AbsoluteFilenames.Reserve(Files.Num());
-		for (const FFixtureFile* File : Files)
-		{
-			Session.Preprocessor.AddFile(File->RelativePath, File->AbsolutePath);
-			AbsoluteFilenames.Add(File->AbsolutePath);
-		}
+		AddFilesToPreprocessor(Session.Preprocessor, Files, AbsoluteFilenames);
 
 		Session.Result.bSuccess = Session.Preprocessor.Preprocess();
 		Session.Result.Modules = Session.Preprocessor.GetModulesToCompile();
 		AppendEngineDiagnostics(Engine, AbsoluteFilenames, Session.Result);
 		return Session;
+	}
+
+	/** Single-file convenience overload. */
+	inline FPreprocessSession RunPreprocessSession(
+		FAngelscriptEngine& Engine,
+		const FFixtureFile& File,
+		const FAngelscriptPreprocessorContext& Context)
+	{
+		const FFixtureFile* FilePtr = &File;
+		return RunPreprocessSession(Engine, MakeArrayView(&FilePtr, 1), Context);
+	}
+
+	/** Multi-file convenience overload using TArray<FFixtureFile>. */
+	inline FPreprocessSession RunPreprocessSession(
+		FAngelscriptEngine& Engine,
+		const TArray<FFixtureFile>& Files,
+		const FAngelscriptPreprocessorContext& Context)
+	{
+		TArray<const FFixtureFile*> Ptrs;
+		Ptrs.Reserve(Files.Num());
+		for (const FFixtureFile& F : Files)
+		{
+			Ptrs.Add(&F);
+		}
+		return RunPreprocessSession(Engine, MakeArrayView(Ptrs), Context);
 	}
 
 	/** Single-file convenience overload. */

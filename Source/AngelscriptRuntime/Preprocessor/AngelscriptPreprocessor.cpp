@@ -1,6 +1,7 @@
 #include "Preprocessor/AngelscriptPreprocessor.h"
 
 #include "ClassGenerator/AngelscriptClassGenerator.h"
+#include "Compilation/AngelscriptCompilationEvents.h"
 #include "GameFramework/Actor.h"
 #include "UObject/Interface.h"
 #include "Misc/ScopedSlowTask.h"
@@ -35,41 +36,114 @@
 FOnAngelscriptPreprocessHook FAngelscriptPreprocessor::OnProcessChunks;
 FOnAngelscriptPreprocessHook FAngelscriptPreprocessor::OnPostProcessCode;
 
-FAngelscriptPreprocessor::FAngelscriptPreprocessor()
+namespace AngelscriptPreprocessor_Private
 {
-	PreprocessorFlags.Add(TEXT("EDITOR"), FAngelscriptEngine::ShouldUseEditorScriptsForCurrentContext());
-	PreprocessorFlags.Add(TEXT("EDITORONLY_DATA"), WITH_EDITORONLY_DATA && ((!IsRunningGame() && !IsRunningDedicatedServer()) || FAngelscriptEngine::ShouldUseEditorScriptsForCurrentContext()));
-	PreprocessorFlags.Add(TEXT("COOK_COMMANDLET"), IsRunningCookCommandlet());
-	PreprocessorFlags.Add(TEXT("RELEASE"), UE_BUILD_SHIPPING || UE_BUILD_TEST);
-	PreprocessorFlags.Add(TEXT("TEST"), !UE_BUILD_SHIPPING);
-	PreprocessorFlags.Add(TEXT("WITH_SERVER_CODE"), WITH_SERVER_CODE);
-
-	auto AngelscriptSettings = UAngelscriptSettings::StaticClass()->GetDefaultObject<UAngelscriptSettings>();
-	for (auto& Flag : AngelscriptSettings->PreprocessorFlags)
+	void BroadcastPreprocessorCompilationEvent(
+		EAngelscriptCompilationEventType EventType,
+		FName Phase,
+		const FAngelscriptPreprocessor& Preprocessor)
 	{
-		PreprocessorFlags.Add(Flag, true);
+		if (!FAngelscriptCompilationEvents::HasListeners())
+		{
+			return;
+		}
+
+		const FAngelscriptPreprocessorSummary Summary = Preprocessor.GetSummary();
+
+		FAngelscriptCompilationEvent Event;
+		Event.Type = EventType;
+		Event.Phase = Phase;
+		Event.bSucceeded = Summary.bSucceeded;
+		Event.bFailed = Summary.bHasError;
+		Event.FileCount = Summary.FileCount;
+		Event.ModuleCount = Summary.ModuleCount;
+		Event.ImportCount = Summary.ImportCount;
+		Event.ClassCount = Summary.ClassCount + Summary.StructCount;
+		Event.FunctionCount = Summary.FunctionCount;
+		Event.ModuleNames = Summary.ModuleNames;
+		Event.FileNames.Reserve(Summary.Files.Num());
+		for (const FAngelscriptPreprocessorFileSummary& FileSummary : Summary.Files)
+		{
+			Event.FileNames.AddUnique(FileSummary.RelativeFilename);
+		}
+		Event.PreprocessorSummary = Summary;
+
+		FAngelscriptCompilationEvents::Broadcast(Event);
+	}
+}
+
+FAngelscriptPreprocessorContext FAngelscriptPreprocessorContext::CreateFromCurrentEngineContext()
+{
+	FAngelscriptPreprocessorContext Context;
+	Context.PreprocessorFlags.Add(TEXT("EDITOR"), FAngelscriptEngine::ShouldUseEditorScriptsForCurrentContext());
+	Context.PreprocessorFlags.Add(TEXT("EDITORONLY_DATA"), WITH_EDITORONLY_DATA && ((!IsRunningGame() && !IsRunningDedicatedServer()) || FAngelscriptEngine::ShouldUseEditorScriptsForCurrentContext()));
+	Context.PreprocessorFlags.Add(TEXT("COOK_COMMANDLET"), IsRunningCookCommandlet());
+	Context.PreprocessorFlags.Add(TEXT("RELEASE"), UE_BUILD_SHIPPING || UE_BUILD_TEST);
+	Context.PreprocessorFlags.Add(TEXT("TEST"), !UE_BUILD_SHIPPING);
+	Context.PreprocessorFlags.Add(TEXT("WITH_SERVER_CODE"), WITH_SERVER_CODE);
+
+	const UAngelscriptSettings* AngelscriptSettings = GetDefault<UAngelscriptSettings>();
+	if (FAngelscriptEngine* CurrentEngine = FAngelscriptEngine::TryGetCurrentEngine())
+	{
+		if (CurrentEngine->ConfigSettings != nullptr)
+		{
+			AngelscriptSettings = CurrentEngine->ConfigSettings;
+		}
+		Context.bUseAutomaticImportMethod = CurrentEngine->ShouldUseAutomaticImportMethod();
+	}
+	else
+	{
+		Context.bUseAutomaticImportMethod = FAngelscriptEngine::ShouldUseAutomaticImportMethodForCurrentContext();
 	}
 
-	bDefaultFunctionBlueprintCallable = AngelscriptSettings->bDefaultFunctionBlueprintCallable;
-	DefaultPropertyEditSpecifier = AngelscriptSettings->DefaultPropertyEditSpecifier;
-	DefaultPropertyEditSpecifierForStructs = AngelscriptSettings->DefaultPropertyEditSpecifierForStructs;
-	DefaultPropertyBlueprintSpecifier = AngelscriptSettings->DefaultPropertyBlueprintSpecifier;
+	for (auto& Flag : AngelscriptSettings->PreprocessorFlags)
+	{
+		Context.PreprocessorFlags.Add(Flag, true);
+	}
+
+	Context.bWarnOnManualImportStatements = AngelscriptSettings->bWarnOnManualImportStatements;
+	Context.bDefaultFunctionBlueprintCallable = AngelscriptSettings->bDefaultFunctionBlueprintCallable;
+	Context.DefaultPropertyEditSpecifier = AngelscriptSettings->DefaultPropertyEditSpecifier;
+	Context.DefaultPropertyEditSpecifierForStructs = AngelscriptSettings->DefaultPropertyEditSpecifierForStructs;
+	Context.DefaultPropertyBlueprintSpecifier = AngelscriptSettings->DefaultPropertyBlueprintSpecifier;
+	Context.StaticClassDeprecation = AngelscriptSettings->StaticClassDeprecation;
+	Context.bScriptFloatIsFloat64 = AngelscriptSettings->bScriptFloatIsFloat64;
 
 #if WITH_EDITOR
 	if (FAngelscriptEngine::IsSimulatingCookedForCurrentContext())
 	{
-		PreprocessorFlags.Add(TEXT("EDITOR"), false);
-		PreprocessorFlags.Add(TEXT("EDITORONLY_DATA"), false);
-		PreprocessorFlags.Add(TEXT("RELEASE"), true);
-		PreprocessorFlags.Add(TEXT("TEST"), false);
+		Context.PreprocessorFlags.Add(TEXT("EDITOR"), false);
+		Context.PreprocessorFlags.Add(TEXT("EDITORONLY_DATA"), false);
+		Context.PreprocessorFlags.Add(TEXT("RELEASE"), true);
+		Context.PreprocessorFlags.Add(TEXT("TEST"), false);
 	}
 
 	if (FAngelscriptEngine::IsForcingPreprocessEditorCodeForCurrentContext())
 	{
-		PreprocessorFlags.Add(TEXT("EDITOR"), true);
-		PreprocessorFlags.Add(TEXT("EDITORONLY_DATA"), true);
+		Context.PreprocessorFlags.Add(TEXT("EDITOR"), true);
+		Context.PreprocessorFlags.Add(TEXT("EDITORONLY_DATA"), true);
 	}
 #endif
+
+	return Context;
+}
+
+FAngelscriptPreprocessor::FAngelscriptPreprocessor()
+	: FAngelscriptPreprocessor(FAngelscriptPreprocessorContext::CreateFromCurrentEngineContext())
+{
+}
+
+FAngelscriptPreprocessor::FAngelscriptPreprocessor(const FAngelscriptPreprocessorContext& InContext)
+{
+	PreprocessorFlags = InContext.PreprocessorFlags;
+	bUseAutomaticImportMethod = InContext.bUseAutomaticImportMethod;
+	bWarnOnManualImportStatements = InContext.bWarnOnManualImportStatements;
+	bDefaultFunctionBlueprintCallable = InContext.bDefaultFunctionBlueprintCallable;
+	DefaultPropertyEditSpecifier = InContext.DefaultPropertyEditSpecifier;
+	DefaultPropertyEditSpecifierForStructs = InContext.DefaultPropertyEditSpecifierForStructs;
+	DefaultPropertyBlueprintSpecifier = InContext.DefaultPropertyBlueprintSpecifier;
+	StaticClassDeprecation = InContext.StaticClassDeprecation;
+	bScriptFloatIsFloat64 = InContext.bScriptFloatIsFloat64;
 }
 
 TArray<TSharedRef<FAngelscriptModuleDesc>> FAngelscriptPreprocessor::GetModulesToCompile()
@@ -81,6 +155,103 @@ TArray<TSharedRef<FAngelscriptModuleDesc>> FAngelscriptPreprocessor::GetModulesT
 		OutArray.AddUnique(File.Module.ToSharedRef());
 
 	return OutArray;
+}
+
+FAngelscriptPreprocessorSummary FAngelscriptPreprocessor::GetSummary() const
+{
+	FAngelscriptPreprocessorSummary Summary;
+	Summary.Stage = CurrentSummaryStage;
+	Summary.bHasError = bHasError;
+	Summary.bSucceeded = bIsPreprocessed && !bHasError;
+	Summary.FileCount = Files.Num();
+
+	for (const FFile& File : Files)
+	{
+		FAngelscriptPreprocessorFileSummary& FileSummary = Summary.Files.AddDefaulted_GetRef();
+		FileSummary.RelativeFilename = File.RelativeFilename;
+		FileSummary.AbsoluteFilename = File.AbsoluteFilename;
+		FileSummary.RawCodeCharacterCount = File.RawCode.Len();
+		FileSummary.ChunkCount = File.ChunkedCode.Num();
+		FileSummary.ImportCount = File.Imports.Num();
+		FileSummary.DelegateCount = File.Delegates.Num();
+		FileSummary.GeneratedCodeSectionCount = File.GeneratedCode.Num();
+		FileSummary.ProcessedCodeCharacterCount = File.ProcessedCode.Len();
+
+		for (const FString& GeneratedCode : File.GeneratedCode)
+		{
+			FileSummary.GeneratedCodeCharacterCount += GeneratedCode.Len();
+		}
+
+		Summary.ChunkCount += FileSummary.ChunkCount;
+		Summary.ImportCount += FileSummary.ImportCount;
+		Summary.GeneratedCodeSectionCount += FileSummary.GeneratedCodeSectionCount;
+		Summary.GeneratedCodeCharacterCount += FileSummary.GeneratedCodeCharacterCount;
+		Summary.ProcessedCodeCharacterCount += FileSummary.ProcessedCodeCharacterCount;
+
+		if (File.Module.IsValid())
+		{
+			FileSummary.ModuleName = File.Module->ModuleName;
+			Summary.ModuleNames.AddUnique(File.Module->ModuleName);
+
+			for (const FString& ImportedModuleName : File.Module->ImportedModules)
+			{
+				FileSummary.ImportedModuleNames.AddUnique(ImportedModuleName);
+				Summary.ImportedModuleNames.AddUnique(ImportedModuleName);
+			}
+
+			for (const TSharedRef<FAngelscriptClassDesc>& ClassDesc : File.Module->Classes)
+			{
+				FileSummary.ClassNames.AddUnique(ClassDesc->ClassName);
+				Summary.ClassNames.AddUnique(ClassDesc->ClassName);
+
+				if (ClassDesc->bIsStruct)
+				{
+					++FileSummary.StructCount;
+					++Summary.StructCount;
+				}
+				else
+				{
+					++FileSummary.ClassCount;
+					++Summary.ClassCount;
+				}
+
+				for (const TSharedRef<FAngelscriptFunctionDesc>& FunctionDesc : ClassDesc->Methods)
+				{
+					FileSummary.FunctionNames.AddUnique(FunctionDesc->FunctionName);
+					Summary.FunctionNames.AddUnique(FunctionDesc->FunctionName);
+					++FileSummary.FunctionCount;
+					++Summary.FunctionCount;
+				}
+
+				for (const TSharedRef<FAngelscriptPropertyDesc>& PropertyDesc : ClassDesc->Properties)
+				{
+					FileSummary.PropertyNames.AddUnique(PropertyDesc->PropertyName);
+					Summary.PropertyNames.AddUnique(PropertyDesc->PropertyName);
+					++FileSummary.PropertyCount;
+					++Summary.PropertyCount;
+				}
+			}
+
+			for (const TSharedRef<FAngelscriptEnumDesc>& EnumDesc : File.Module->Enums)
+			{
+				FileSummary.EnumNames.AddUnique(EnumDesc->EnumName);
+				Summary.EnumNames.AddUnique(EnumDesc->EnumName);
+				++FileSummary.EnumCount;
+				++Summary.EnumCount;
+			}
+
+			for (const TSharedRef<FAngelscriptDelegateDesc>& DelegateDesc : File.Module->Delegates)
+			{
+				FileSummary.DelegateNames.AddUnique(DelegateDesc->DelegateName);
+				Summary.DelegateNames.AddUnique(DelegateDesc->DelegateName);
+				++FileSummary.DelegateCount;
+				++Summary.DelegateCount;
+			}
+		}
+	}
+
+	Summary.ModuleCount = Summary.ModuleNames.Num();
+	return Summary;
 }
 
 FString FAngelscriptPreprocessor::FilenameToModuleName(const FString& Filename)
@@ -253,8 +424,6 @@ void FAngelscriptPreprocessor::PerformAsynchronousLoads()
 
 bool FAngelscriptPreprocessor::Preprocess()
 {
-	ConfigSettings = FAngelscriptEngine::Get().ConfigSettings;
-
 	FScopedSlowTask SlowTask(1.f, FText::FromString("Script Preprocessing"));
 	SlowTask.EnterProgressFrame(1.f);
 
@@ -271,7 +440,7 @@ bool FAngelscriptPreprocessor::Preprocess()
 	for (FFile& File : Files)
 		ParseIntoChunks(File);
 
-	if (!FAngelscriptEngine::ShouldUseAutomaticImportMethodForCurrentContext())
+	if (!bUseAutomaticImportMethod)
 	{
 		// Put the files in the correct order to satisfy explicit imports
 		TArray<FFile> SortedFiles;
@@ -312,6 +481,11 @@ bool FAngelscriptPreprocessor::Preprocess()
 	for (FFile& File : Files)
 		ProcessDelegates(File);
 
+	CurrentSummaryStage = EAngelscriptPreprocessorSummaryStage::ProcessChunks;
+	AngelscriptPreprocessor_Private::BroadcastPreprocessorCompilationEvent(
+		EAngelscriptCompilationEventType::PreprocessProcessChunks,
+		TEXT("Preprocess.ProcessChunks"),
+		*this);
 	OnProcessChunks.Broadcast(*this);
 
 	// Process any class default statements
@@ -339,6 +513,11 @@ bool FAngelscriptPreprocessor::Preprocess()
 		PostProcessLiteralAssets(File);
 	}
 
+	CurrentSummaryStage = EAngelscriptPreprocessorSummaryStage::PostProcessCode;
+	AngelscriptPreprocessor_Private::BroadcastPreprocessorCompilationEvent(
+		EAngelscriptCompilationEventType::PreprocessPostProcessCode,
+		TEXT("Preprocess.PostProcessCode"),
+		*this);
 	OnPostProcessCode.Broadcast(*this);
 
 	// Add the processed code into the module
@@ -359,6 +538,7 @@ bool FAngelscriptPreprocessor::Preprocess()
 		File.Module->Code.Emplace(MoveTemp(Section));
 	}
 
+	CurrentSummaryStage = EAngelscriptPreprocessorSummaryStage::Completed;
 	return !bHasError;
 }
 
@@ -537,9 +717,9 @@ void FAngelscriptPreprocessor::ProcessImports(FFile& File, TArray<FFile>& OutSor
 		File.Module->ImportedModules.AddUnique(ImportDesc.ModuleName);
 		ReplaceWithBlank(File.ChunkedCode[ImportDesc.ChunkIndex], ImportDesc.StartPosInChunk, ImportDesc.EndPosInChunk+1);
 
-		if (FAngelscriptEngine::ShouldUseAutomaticImportMethodForCurrentContext())
+		if (bUseAutomaticImportMethod)
 		{
-			if (GetDefault<UAngelscriptSettings>()->bWarnOnManualImportStatements)
+			if (bWarnOnManualImportStatements)
 			{
 				LineWarning(File, ImportDesc.FileLineNumber, TEXT("Automatic imports are active, import statements will be ignored."));
 			}
@@ -552,7 +732,7 @@ void FAngelscriptPreprocessor::ProcessImports(FFile& File, TArray<FFile>& OutSor
 	OutSortedFiles.Add(File);
 }
 
-static FString GetReturnInit(const FString& ReturnType)
+static FString GetReturnInit(const FString& ReturnType, bool bScriptFloatIsFloat64)
 {
 	static bool bHaveInitMap = false;
 	static TMap<FString, FString> InitMap;
@@ -575,14 +755,11 @@ static FString GetReturnInit(const FString& ReturnType)
 		InitMap.Add(TEXT("float64"), TEXT(" = 0.0"));
 		InitMap.Add(TEXT("double"), TEXT(" = 0.0"));
 
-		auto* ConfigSettings = GetMutableDefault<UAngelscriptSettings>();
-		if (ConfigSettings->bScriptFloatIsFloat64)
-			InitMap.Add(TEXT("float"), TEXT(" = 0.0"));
-		else
-			InitMap.Add(TEXT("float"), TEXT(" = 0.f"));
-
 		bHaveInitMap = true;
 	}
+
+	if (ReturnType == TEXT("float"))
+		return bScriptFloatIsFloat64 ? TEXT(" = 0.0") : TEXT(" = 0.f");
 
 	FString* ReturnInit = InitMap.Find(ReturnType);
 	if (ReturnInit != nullptr)
@@ -730,7 +907,7 @@ void FAngelscriptPreprocessor::ProcessDelegates(FFile& File)
 			if (bHaveReturn)
 			{
 				GeneratedReturn += FString::Printf(TEXT(" %s __ReturnValue%s;"),
-					*ReturnType, *GetReturnInit(ReturnType));
+					*ReturnType, *GetReturnInit(ReturnType, bScriptFloatIsFloat64));
 			}
 
 			GeneratedBody += PushArgumentCode;
@@ -936,7 +1113,7 @@ void FAngelscriptPreprocessor::DetectClasses(FFile& File, FChunk& Chunk)
 		FString ClassVar = FString::Printf(TEXT("__StaticType_%s"), *ClassDesc->ClassName);
 		ClassDesc->StaticClassGlobalVariableName = ClassVar;
 
-		if (ConfigSettings->StaticClassDeprecation == EAngelscriptStaticClassMode::Disallowed)
+		if (StaticClassDeprecation == EAngelscriptStaticClassMode::Disallowed)
 		{
 			if (ClassDesc->Namespace.IsSet())
 			{
@@ -951,7 +1128,7 @@ void FAngelscriptPreprocessor::DetectClasses(FFile& File, FChunk& Chunk)
 		else
 		{
 			FString FunctionSpecifiers;
-			if (ConfigSettings->StaticClassDeprecation == EAngelscriptStaticClassMode::Deprecated)
+			if (StaticClassDeprecation == EAngelscriptStaticClassMode::Deprecated)
 				FunctionSpecifiers += TEXT(" deprecated");
 
 			if (ClassDesc->Namespace.IsSet())
@@ -1927,7 +2104,7 @@ void FAngelscriptPreprocessor::GenerateBlueprintEventWrapper(FFile& File, FChunk
 	if (bHaveReturn)
 	{
 		Code += FString::Printf(TEXT(" %s __ReturnValue%s; __Evt_PushArgumentRef%s(__ReturnValue);"),
-			*ReturnType, *GetReturnInit(ReturnType), *GetPushArgumentSuffix(ReturnType));
+			*ReturnType, *GetReturnInit(ReturnType, bScriptFloatIsFloat64), *GetPushArgumentSuffix(ReturnType));
 	}
 
 	Code += FString::Printf(TEXT(" __Evt_Execute(this, %s);"), *GenerateStaticName(File, FunctionDesc->FunctionName));
