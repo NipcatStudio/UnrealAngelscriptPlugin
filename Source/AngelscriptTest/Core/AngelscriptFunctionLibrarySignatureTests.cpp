@@ -452,6 +452,68 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptFunctionLibrarySignatureTests,
 		}
 	}
 
+	TEST_METHOD(SubsystemHelperNamespaceBinds)
+	{
+		SubsystemGetterMetadataTest::ResetIsolatedEnvironment();
+		ON_SCOPE_EXIT
+		{
+			SubsystemGetterMetadataTest::ResetIsolatedEnvironment();
+		};
+
+		const FAngelscriptEngineDependencies Dependencies = FAngelscriptEngineDependencies::CreateDefault();
+		TUniquePtr<FAngelscriptEngine> Engine = AngelscriptTestSupport::CreateScriptScanFreeFullEngineForTesting(FAngelscriptEngineConfig(), Dependencies);
+		if (!TestRunner->TestTrue(TEXT("SubsystemHelperNamespaceBinds should create a testing engine"), Engine.IsValid()))
+		{
+			return;
+		}
+
+		FAngelscriptEngineScope EngineScope(*Engine);
+		asIScriptEngine* ScriptEngine = Engine->GetScriptEngine();
+		if (!TestRunner->TestNotNull(TEXT("SubsystemHelperNamespaceBinds should expose the AS engine"), ScriptEngine))
+		{
+			return;
+		}
+
+		const FString PreviousNamespace = ANSI_TO_TCHAR(ScriptEngine->GetDefaultNamespace());
+		if (!TestRunner->TestTrue(TEXT("Subsystem helper namespace should be selectable"), ScriptEngine->SetDefaultNamespace("Subsystem") >= 0))
+		{
+			return;
+		}
+		ON_SCOPE_EXIT
+		{
+			ScriptEngine->SetDefaultNamespace(TCHAR_TO_ANSI(*PreviousNamespace));
+		};
+
+		const TArray<const ANSICHAR*> ExpectedNames = {
+			"GetEngineSubsystem",
+			"GetGameInstanceSubsystem",
+			"GetLocalPlayerSubsystem",
+			"GetWorldSubsystem",
+			"GetLocalPlayerSubsystemFromLocalPlayer",
+			"GetLocalPlayerSubsystemFromPlayerController"
+		};
+
+		for (const ANSICHAR* ExpectedName : ExpectedNames)
+		{
+			bool bFound = false;
+			for (asUINT FunctionIndex = 0, FunctionCount = ScriptEngine->GetGlobalFunctionCount(); FunctionIndex < FunctionCount; ++FunctionIndex)
+			{
+				asIScriptFunction* Function = ScriptEngine->GetGlobalFunctionByIndex(FunctionIndex);
+				if (Function != nullptr
+					&& FCStringAnsi::Strcmp(Function->GetNamespace(), "Subsystem") == 0
+					&& FCStringAnsi::Strcmp(Function->GetName(), ExpectedName) == 0)
+				{
+					bFound = true;
+					break;
+				}
+			}
+
+			TestRunner->TestTrue(
+				FString::Printf(TEXT("Subsystem helper namespace should bind %hs"), ExpectedName),
+				bFound);
+		}
+	}
+
 	TEST_METHOD(MathReturnValueHelperMetadata)
 	{
 		SubsystemGetterMetadataTest::ResetIsolatedEnvironment();

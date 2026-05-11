@@ -53,6 +53,7 @@ BEGIN_AS_NAMESPACE
 class asCScriptFunction;
 class asCScriptEngine;
 
+
 using asLineCallback = void(*)(asCContext*);
 using asStackPopCallback = void(*)(asCContext*, void* oldStackFrameStart, void* oldStackFrameEnd);
 
@@ -121,8 +122,10 @@ public:
 	int                SetLineCallback(asLineCallback Callback);
 	int                SetLoopDetectionCallback(asLineCallback Callback);
 	int                SetStackPopCallback(asStackPopCallback Callback);
+	int                SetInstructionCallback(asVMInstructionCallback Callback, void* UserData = 0);
 	void               ClearLineCallback();
 	void               ClearStackPopCallback();
+	void               ClearInstructionCallback();
 	asUINT             GetCallstackSize() const;
 	asIScriptFunction *GetFunction(asUINT stackLevel);
 	asUINT             GetBlueprintCallstackFrame(asUINT stackLevel);
@@ -161,6 +164,7 @@ public:
 	void DetachEngine();
 
 	void ExecuteNext();
+	void NotifyInstructionCallback(asEVMInstructionPhase Phase, asBYTE Instruction, const char* InstructionName, asDWORD* ProgramPointer, asDWORD* StackPointer, asDWORD* StackFramePointer);
 	void CleanStack(bool catchException = false);
 	bool CleanStackFrame(bool catchException = false);
 	void CleanArgsOnStack();
@@ -228,6 +232,8 @@ public:
 	asLineCallback m_lineCallback = nullptr;
 	asLineCallback m_loopDetectionCallback = nullptr;
 	asStackPopCallback m_stackPopCallback = nullptr;
+	asVMInstructionCallback m_instructionCallback = nullptr;
+	void* m_instructionCallbackUserData = nullptr;
 	double m_loopDetectionTimer = -1.0;
 	int m_loopDetectionCounter = 0;
 	int m_loopDetectionExclusionCounter = 0;

@@ -7,6 +7,7 @@
 #include "Subsystems/LocalPlayerSubsystem.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "Subsystems/GameInstanceSubsystem.h"
+#include "Subsystems/SubsystemBlueprintLibrary.h"
 
 #include "Engine/LocalPlayer.h"
 #include "GameFramework/PlayerController.h"
@@ -21,8 +22,65 @@
 #include "EditorSubsystem.h"
 #endif
 
+namespace
+{
+	template<typename TSubsystem>
+	TSubclassOf<TSubsystem> MakeSubsystemClass(UClass* Class)
+	{
+		if (Class == nullptr || !Class->IsChildOf(TSubsystem::StaticClass()))
+			return TSubclassOf<TSubsystem>();
+
+		return TSubclassOf<TSubsystem>(Class);
+	}
+}
+
 AS_FORCE_LINK const FAngelscriptBinds::FBind Bind_Subsystems((int32)FAngelscriptBinds::EOrder::Late + 150, []
 {
+	{
+		FAngelscriptBinds::FNamespace Namespace("Subsystem");
+
+		FAngelscriptBinds::BindGlobalFunction("UObject GetEngineSubsystem(UClass Class)",
+		[](UClass* Class) -> UObject*
+		{
+			const TSubclassOf<UEngineSubsystem> SubsystemClass = MakeSubsystemClass<UEngineSubsystem>(Class);
+			return SubsystemClass ? USubsystemBlueprintLibrary::GetEngineSubsystem(SubsystemClass) : nullptr;
+		});
+
+		FAngelscriptBinds::BindGlobalFunction("UObject GetGameInstanceSubsystem(UClass Class)",
+		[](UClass* Class) -> UObject*
+		{
+			const TSubclassOf<UGameInstanceSubsystem> SubsystemClass = MakeSubsystemClass<UGameInstanceSubsystem>(Class);
+			return SubsystemClass ? USubsystemBlueprintLibrary::GetGameInstanceSubsystem(FAngelscriptEngine::TryGetCurrentWorldContextObject(), SubsystemClass) : nullptr;
+		});
+
+		FAngelscriptBinds::BindGlobalFunction("UObject GetLocalPlayerSubsystem(UClass Class)",
+		[](UClass* Class) -> UObject*
+		{
+			const TSubclassOf<ULocalPlayerSubsystem> SubsystemClass = MakeSubsystemClass<ULocalPlayerSubsystem>(Class);
+			return SubsystemClass ? USubsystemBlueprintLibrary::GetLocalPlayerSubsystem(FAngelscriptEngine::TryGetCurrentWorldContextObject(), SubsystemClass) : nullptr;
+		});
+
+		FAngelscriptBinds::BindGlobalFunction("UObject GetWorldSubsystem(UClass Class)",
+		[](UClass* Class) -> UObject*
+		{
+			const TSubclassOf<UWorldSubsystem> SubsystemClass = MakeSubsystemClass<UWorldSubsystem>(Class);
+			return SubsystemClass ? USubsystemBlueprintLibrary::GetWorldSubsystem(FAngelscriptEngine::TryGetCurrentWorldContextObject(), SubsystemClass) : nullptr;
+		});
+
+		FAngelscriptBinds::BindGlobalFunction("UObject GetLocalPlayerSubsystemFromLocalPlayer(ULocalPlayer LocalPlayer, UClass Class)",
+		[](ULocalPlayer* LocalPlayer, UClass* Class) -> UObject*
+		{
+			const TSubclassOf<ULocalPlayerSubsystem> SubsystemClass = MakeSubsystemClass<ULocalPlayerSubsystem>(Class);
+			return LocalPlayer != nullptr && SubsystemClass ? LocalPlayer->GetSubsystemBase(SubsystemClass) : nullptr;
+		});
+
+		FAngelscriptBinds::BindGlobalFunction("UObject GetLocalPlayerSubsystemFromPlayerController(APlayerController PlayerController, UClass Class)",
+		[](APlayerController* PlayerController, UClass* Class) -> UObject*
+		{
+			const TSubclassOf<ULocalPlayerSubsystem> SubsystemClass = MakeSubsystemClass<ULocalPlayerSubsystem>(Class);
+			return PlayerController != nullptr && SubsystemClass ? USubsystemBlueprintLibrary::GetLocalPlayerSubSystemFromPlayerController(PlayerController, SubsystemClass) : nullptr;
+		});
+	}
 	// Bind easy ::Get() accessor functions for all subsystem classes
 	for (UClass* Class : TObjectRange<UClass>())
 	{

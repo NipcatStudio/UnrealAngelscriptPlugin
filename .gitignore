@@ -73,6 +73,9 @@ Saved/
 # Compiled source files for the engine to use
 Intermediate/
 
+# C# / UBT plugin intermediate outputs
+Source/*/obj/
+
 # Cache files for the editor to use
 DerivedDataCache/
 

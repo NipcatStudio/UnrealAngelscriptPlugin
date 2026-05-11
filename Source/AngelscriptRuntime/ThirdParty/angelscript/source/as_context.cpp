@@ -1610,14 +1610,79 @@ bool asCContext::CallInterfaceMethod(asCScriptFunction *func)
 	return true;
 }
 
+void asCContext::NotifyInstructionCallback(asEVMInstructionPhase Phase, asBYTE Instruction, const char* InstructionName, asDWORD* ProgramPointer, asDWORD* StackPointer, asDWORD* StackFramePointer)
+{
+	if (m_instructionCallback == nullptr || ProgramPointer == nullptr)
+	{
+		return;
+	}
+
+	asSVMInstructionInfo State;
+	State.Phase = Phase;
+	State.Instruction = Instruction;
+	State.InstructionName = InstructionName;
+	State.ProgramPointer = ProgramPointer;
+	State.StackPointer = StackPointer;
+	State.StackFramePointer = StackFramePointer;
+	State.ValueRegister = m_regs.valueRegister;
+	State.ObjectRegister = m_regs.objectRegister;
+	State.ObjectType = m_regs.objectType;
+	State.CurrentFunction = m_currentFunction;
+	if (m_currentFunction != nullptr && m_currentFunction->scriptData != nullptr)
+	{
+		State.BytecodeOffset = int(ProgramPointer - m_currentFunction->scriptData->byteCode.AddressOf());
+	}
+	State.Status = m_status;
+	State.CallstackDepth = GetCallstackSize();
+	State.StackIndex = m_stackIndex;
+	m_instructionCallback(this, &State, m_instructionCallbackUserData);
+}
+
 void asCContext::ExecuteNext()
 {
 	asDWORD *l_bc = m_regs.programPointer;
 	asDWORD *l_sp = m_regs.stackPointer;
 	asDWORD *l_fp = m_regs.stackFramePointer;
 
+
+	struct asSInstructionCallbackScope
+	{
+		asSInstructionCallbackScope(asCContext* InContext, asDWORD*& InProgramPointer, asDWORD*& InStackPointer, asDWORD*& InStackFramePointer, bool bInEnabled)
+			: Context(InContext)
+			, ProgramPointer(InProgramPointer)
+			, StackPointer(InStackPointer)
+			, StackFramePointer(InStackFramePointer)
+			, bEnabled(bInEnabled)
+		{
+			if (bEnabled)
+			{
+				Instruction = *(asBYTE*)ProgramPointer;
+				InstructionName = asBCInfo[Instruction].name;
+				Context->NotifyInstructionCallback(asVM_BEFORE_INSTRUCTION, Instruction, InstructionName, ProgramPointer, StackPointer, StackFramePointer);
+			}
+		}
+
+		~asSInstructionCallbackScope()
+		{
+			if (bEnabled)
+			{
+				Context->NotifyInstructionCallback(asVM_AFTER_INSTRUCTION, Instruction, InstructionName, ProgramPointer, StackPointer, StackFramePointer);
+			}
+		}
+
+		asCContext* Context;
+		asDWORD*& ProgramPointer;
+		asDWORD*& StackPointer;
+		asDWORD*& StackFramePointer;
+		asBYTE Instruction = 0;
+		const char* InstructionName = nullptr;
+		bool bEnabled = false;
+	};
+
 	for(;;)
 	{
+		const bool bObserveInstruction = m_instructionCallback != nullptr && l_bc != nullptr;
+		asSInstructionCallbackScope InstructionCallbackScope(this, l_bc, l_sp, l_fp, bObserveInstruction);
 
 #ifdef AS_DEBUG
 	// Gather statistics on executed bytecode
@@ -5016,6 +5081,13 @@ int asCContext::SetStackPopCallback(asStackPopCallback StackPopCallback)
 	return 0;
 }
 
+int asCContext::SetInstructionCallback(asVMInstructionCallback Callback, void* UserData)
+{
+	m_instructionCallback = Callback;
+	m_instructionCallbackUserData = UserData;
+	return 0;
+}
+
 // interface
 int asCContext::SetExceptionCallback(asSFuncPtr callback, void *obj, int callConv)
 {
@@ -5076,6 +5148,13 @@ void asCContext::ClearLineCallback()
 void asCContext::ClearStackPopCallback()
 {
 	 m_stackPopCallback = nullptr;
+}
+
+// interface
+void asCContext::ClearInstructionCallback()
+{
+	m_instructionCallback = nullptr;
+	m_instructionCallbackUserData = nullptr;
 }
 
 // interface

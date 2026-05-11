@@ -439,6 +439,33 @@ typedef unsigned int   asUINT;
 	#endif
 #endif
 
+// VM instruction callbacks
+// The instruction info pointer is valid only during the callback invocation.
+enum asEVMInstructionPhase
+{
+	asVM_BEFORE_INSTRUCTION,
+	asVM_AFTER_INSTRUCTION,
+};
+
+struct asSVMInstructionInfo
+{
+	asEVMInstructionPhase Phase = asVM_BEFORE_INSTRUCTION;
+	asBYTE Instruction = 0;
+	const char* InstructionName = 0;
+	const asDWORD* ProgramPointer = 0;
+	const asDWORD* StackPointer = 0;
+	const asDWORD* StackFramePointer = 0;
+	asQWORD ValueRegister = 0;
+	void* ObjectRegister = 0;
+	asITypeInfo* ObjectType = 0;
+	asIScriptFunction* CurrentFunction = 0;
+	int BytecodeOffset = -1;
+	asEContextState Status = asEXECUTION_UNINITIALIZED;
+	asUINT CallstackDepth = 0;
+	asUINT StackIndex = 0;
+};
+
+typedef void (*asVMInstructionCallback)(asIScriptContext*, const asSVMInstructionInfo*, void*);
 typedef void (*asFUNCTION_t)();
 typedef void (*asGENFUNC_t)(asIScriptGeneric *);
 typedef void *(*asALLOCFUNC_t)(size_t, size_t);
@@ -1014,6 +1041,8 @@ public:
 	virtual void               ClearExceptionCallback() = 0;
 
 	// Debugging
+	virtual int                SetInstructionCallback(asVMInstructionCallback callback, void *obj = 0) = 0;
+	virtual void               ClearInstructionCallback() = 0;
 	virtual void               ClearLineCallback() = 0;
 	virtual asUINT             GetCallstackSize() const = 0;
 	virtual asIScriptFunction *GetFunction(asUINT stackLevel = 0) = 0;

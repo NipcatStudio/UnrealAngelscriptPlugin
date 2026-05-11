@@ -60,6 +60,7 @@ bool FAngelscriptLearningTraceSequenceTest::RunTest(const FString& Parameters)
 
 	TestTrue(TEXT("Summary output should mention the generated step id"), SummaryLines[0].Contains(TEXT("EngineBootstrap.01")));
 	TestTrue(TEXT("Summary output should mention the recorded action"), SummaryLines[0].Contains(TEXT("CreateEngine")));
+	TestTrue(TEXT("Default summary output should include readable key/value evidence"), SummaryLines[0].Contains(TEXT("ReturnCode=0")));
 	return true;
 }
 

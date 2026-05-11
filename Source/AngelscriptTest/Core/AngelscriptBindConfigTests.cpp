@@ -315,7 +315,7 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptBindConfigTests,
 		FAngelscriptBinds::FBind UnnamedBind([CounterKey]()
 		{
 			FBindExecutionRecorder::Increment(CounterKey);
-		});
+		}, nullptr);
 
 		const TArray<FName> AllBindNames = FAngelscriptBinds::GetAllRegisteredBindNames();
 		const TArray<FName> NewBindNames = FindNewBindNames(BaselineBindNames, AllBindNames);

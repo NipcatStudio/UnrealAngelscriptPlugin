@@ -149,7 +149,7 @@ namespace AngelscriptTestSupport
 	FString FAngelscriptLearningTraceSession::BuildEventLine(const FAngelscriptLearningTraceEvent& Event) const
 	{
 		FString Line = FString::Printf(TEXT("[%03d] %s | %s | %s"), Event.SequenceIndex, *Event.StepId, *Event.Action, *Event.Observation);
-		if (SinkConfig.DetailLevel == EAngelscriptLearningTraceDetailLevel::Verbose && Event.Evidence.Num() > 0)
+		if (Event.Evidence.Num() > 0)
 		{
 			for (const FAngelscriptLearningTraceKeyValue& Pair : Event.Evidence)
 			{
