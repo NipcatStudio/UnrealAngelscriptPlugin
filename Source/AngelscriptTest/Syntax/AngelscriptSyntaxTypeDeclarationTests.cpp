@@ -308,6 +308,9 @@ struct MyStruct
 			TEXT("USTRUCT without F prefix"));
 #endif
 
+		TestRunner->AddExpectedErrorPlain(
+			TEXT("Error parsing script struct FChild. Structs may not inherit from anything."),
+			EAutomationExpectedErrorFlags::Contains, 1);
 		SyntaxTestHelpers::AssertFailsToCompile(*TestRunner, Engine, TEXT("StructN_Inherit"),
 			TEXT(R"(
 struct FBase { int X; }
