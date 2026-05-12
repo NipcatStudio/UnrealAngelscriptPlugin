@@ -10,6 +10,7 @@ namespace UnrealBuildTool.Rules
 			PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 			NumIncludedBytesPerUnityCPPOverride = 131072;
 			PrivateDefinitions.Add("ANGELSCRIPT_EXPORT=1");
+			PublicDefinitions.Add("WITH_ANGELSCRIPT=1");
 			PublicDefinitions.Add("ANGELSCRIPT_DLL_LIBRARY_IMPORT=1");
 
 			PublicIncludePaths.Add(ModuleDirectory);
