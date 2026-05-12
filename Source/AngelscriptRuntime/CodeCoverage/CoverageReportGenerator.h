@@ -18,8 +18,8 @@ struct FCoverageCounts
 		}
 	}
 
-	int NumLinesHit;
-	int NumExecutableLines;
+	int NumLinesHit = 0;
+	int NumExecutableLines = 0;
 };
 
 struct FCoverageNode

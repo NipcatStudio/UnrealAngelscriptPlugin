@@ -1,6 +1,7 @@
 #include "CoverageReportGenerator.h"
 
 #include "AngelscriptEngine.h"
+#include "HAL/FileManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Dom/JsonObject.h"
@@ -34,6 +35,12 @@ bool WriteFileCoverageReportHtml(const FString& RelativeFilename, const FLineCov
 	int CurrentLine = 1;
 
 	FString OutputFile = FPaths::ChangeExtension(FPaths::Combine(OutputDir, RelativeFilename), ".as.html");
+	if (!IFileManager::Get().MakeDirectory(*FPaths::GetPath(OutputFile), true))
+	{
+		UE_LOG(Angelscript, Error, TEXT("Failed creating directory for %s"), *OutputFile);
+		return false;
+	}
+
 	if (!FFileHelper::SaveStringToFile(COVERAGE_HTML_HEAD, *OutputFile, FFileHelper::EEncodingOptions::ForceAnsi))
 	{
 		UE_LOG(Angelscript, Error, TEXT("Failed writing %s"), *OutputFile);
@@ -196,9 +203,9 @@ FString SummaryLineForNode(const FString& PathComponent, const FCoverageNode& No
 		*Name, StyleClass, StyleClass, *Link, *Name, *Node.Counts.ToString());
 }
 
-bool WriteCoverageSummaryHtml(FCoverageNode& Node, const FString& OutputDir)
+bool WriteCoverageSummaryHtmlInternal(FCoverageNode& Node, const FString& OutputDir, bool bIsRoot)
 {
-	if (Node.Children.Num() == 0)
+	if (Node.Children.Num() == 0 && !bIsRoot)
 	{
 		// Leaves already have their own HTML file.
 		return true;
@@ -208,7 +215,7 @@ bool WriteCoverageSummaryHtml(FCoverageNode& Node, const FString& OutputDir)
 	for (const TPair<FString, FCoverageNode*>& Child : Node.Children)
 	{
 		FString Subdir = FPaths::Combine(OutputDir, Child.Key);
-		WriteCoverageSummaryHtml(*Child.Value, Subdir);
+		WriteCoverageSummaryHtmlInternal(*Child.Value, Subdir, false);
 
 		Lines.Add(SummaryLineForNode(Child.Key, *Child.Value));
 	}
@@ -235,6 +242,12 @@ bool WriteCoverageSummaryHtml(FCoverageNode& Node, const FString& OutputDir)
 	});
 
 	FString OutputFile = FPaths::Combine(OutputDir, TEXT("index.html"));
+	if (!IFileManager::Get().MakeDirectory(*FPaths::GetPath(OutputFile), true))
+	{
+		UE_LOG(Angelscript, Error, TEXT("Failed creating directory for %s"), *OutputFile);
+		return false;
+	}
+
 	FString Now = FDateTime::Now().ToHttpDate();
 	const FString SummaryHead = FString::Format(COVERAGE_SUMMARY_HTML_HEAD, {Now, Node.Counts.ToString()});
 	if (!FFileHelper::SaveStringToFile(SummaryHead, *OutputFile))
@@ -259,6 +272,11 @@ bool WriteCoverageSummaryHtml(FCoverageNode& Node, const FString& OutputDir)
 	}
 
 	return true;
+}
+
+bool WriteCoverageSummaryHtml(FCoverageNode& Node, const FString& OutputDir)
+{
+	return WriteCoverageSummaryHtmlInternal(Node, OutputDir, true);
 }
 
 TSharedRef<FJsonObject> CountsToJson(FCoverageCounts Counts)
@@ -302,6 +320,12 @@ bool WriteTopLevelCoverageJson(FCoverageNode& Root, const FString& OutputDir)
 	}
 
 	FString OutputFile = FPaths::Combine(OutputDir, TEXT("coverage_summary.json"));
+	if (!IFileManager::Get().MakeDirectory(*FPaths::GetPath(OutputFile), true))
+	{
+		UE_LOG(Angelscript, Error, TEXT("Failed creating directory for %s"), *OutputFile);
+		return false;
+	}
+
 	if (!FFileHelper::SaveStringToFile(JsonString, *OutputFile,
 			FFileHelper::EEncodingOptions::AutoDetect, &IFileManager::Get(), EFileWrite::FILEWRITE_None))
 	{
