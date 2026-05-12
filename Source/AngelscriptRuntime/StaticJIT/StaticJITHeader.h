@@ -99,6 +99,16 @@ struct ANGELSCRIPTRUNTIME_API FStaticJITFunction
 	FORCENOINLINE static void SetUnknownException(FScriptExecution& Execution);
 };
 
+#if WITH_DEV_AUTOMATION_TESTS
+struct ANGELSCRIPTRUNTIME_API FStaticJITTestHooks
+{
+	static void ResetEntryCounters();
+	static void MarkEntry(uint32 FunctionId);
+	static int32 GetEntryCount(uint32 FunctionId);
+	static bool IsFunctionRegistered(uint32 FunctionId);
+};
+#endif
+
 struct FJitRef_Function
 {
 	void* Pointer;

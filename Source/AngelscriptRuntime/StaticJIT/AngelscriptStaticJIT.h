@@ -401,6 +401,9 @@ struct FAngelscriptStaticJIT : public asIJITCompiler
 #if AS_CAN_GENERATE_JIT
 	bool bGenerateOutputCode = false;
 	bool bEmitDebugMetadataInOutput = true;
+#if WITH_DEV_AUTOMATION_TESTS
+	bool bEmitTestEntryMarkersInOutput = false;
+#endif
 	bool bAllowDevirtualize = true;
 	bool bAllowComprehensiveJIT = true;
 
@@ -496,5 +499,21 @@ ANGELSCRIPTRUNTIME_API bool GenerateStaticJITSourceTextForTesting(
 	class asIScriptModule* Module,
 	FString& OutSourceText,
 	bool bEmitDebugMetadata,
+	FString* OutError = nullptr);
+
+ANGELSCRIPTRUNTIME_API bool GenerateStaticJITFilesForTesting(
+	class asIScriptModule* Module,
+	TMap<FString, FString>& OutGeneratedFiles,
+	bool bEmitDebugMetadata,
+	bool bEmitTestEntryMarkers,
+	FString* OutError = nullptr);
+
+ANGELSCRIPTRUNTIME_API bool GenerateStaticJITAotArtifactsForTesting(
+	class asIScriptModule* Module,
+	const FString& PrecompiledCacheFilename,
+	const FGuid& PrecompiledDataGuid,
+	TMap<FString, FString>& OutGeneratedFiles,
+	bool bEmitDebugMetadata,
+	bool bEmitTestEntryMarkers,
 	FString* OutError = nullptr);
 #endif

@@ -577,6 +577,9 @@ public:
 	void SetUseEditorScriptsForTesting(bool bEnabled);
 	void SetAutomaticImportMethodForTesting(bool bEnabled);
 	void SetBlueprintLibraryNamespaceSettingsForTesting(bool bUseScriptName, TArray<FString> PrefixesToStrip, TArray<FString> SuffixesToStrip);
+	bool LoadPrecompiledDataForTesting(const FString& Filename, FString* OutError = nullptr);
+	bool CompileLoadedPrecompiledDataForTesting(ECompileType CompileType, FString* OutError = nullptr);
+	bool GetStaticJITFunctionIdForTesting(asIScriptFunction* Function, uint32& OutId) const;
 #endif
 
 	static const FName& GetStaticName(int32 Index);

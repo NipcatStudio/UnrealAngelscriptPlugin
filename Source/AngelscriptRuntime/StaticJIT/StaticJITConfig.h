@@ -6,7 +6,9 @@
 #endif
 
 #if WITH_EDITOR
+#ifndef AS_ENABLE_EDITOR_JITTED_CODE
 #define AS_SKIP_JITTED_CODE
+#endif
 #endif
 
 #ifndef AS_JIT_VERIFY_PROPERTY_OFFSETS

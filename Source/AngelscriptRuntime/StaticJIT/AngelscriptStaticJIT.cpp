@@ -4,6 +4,7 @@
 #include "Misc/Paths.h"
 
 #include "StaticJIT/PrecompiledData.h"
+#include "StaticJIT/StaticJITHeader.h"
 
 #include "AngelscriptBytecodes.h"
 #include "AngelscriptEngine.h"
@@ -43,6 +44,38 @@ FJITDatabase& FJITDatabase::Get()
 	static FJITDatabase Database;
 	return Database;
 }
+
+#if WITH_DEV_AUTOMATION_TESTS
+namespace
+{
+	TMap<uint32, int32>& GetStaticJITTestEntryCounters()
+	{
+		static TMap<uint32, int32> Counters;
+		return Counters;
+	}
+}
+
+void FStaticJITTestHooks::ResetEntryCounters()
+{
+	GetStaticJITTestEntryCounters().Reset();
+}
+
+void FStaticJITTestHooks::MarkEntry(uint32 FunctionId)
+{
+	int32& Counter = GetStaticJITTestEntryCounters().FindOrAdd(FunctionId);
+	++Counter;
+}
+
+int32 FStaticJITTestHooks::GetEntryCount(uint32 FunctionId)
+{
+	return GetStaticJITTestEntryCounters().FindRef(FunctionId);
+}
+
+bool FStaticJITTestHooks::IsFunctionRegistered(uint32 FunctionId)
+{
+	return FJITDatabase::Get().Functions.Contains(FunctionId);
+}
+#endif
 
 asCString GetScriptClassName(asITypeInfo* Type)
 {
@@ -386,6 +419,12 @@ void FStaticJITContext::GenerateNewFunction(asIScriptFunction* InScriptFunction)
 			(ScriptFunction->GetLineNumber(0, nullptr) & 0xFFFFF));
 	}
 	FunctionHead += TEXT("SCRIPT_ASSUME_NO_EXCEPTION()\n");
+#if WITH_DEV_AUTOMATION_TESTS
+	if (JIT->bEmitTestEntryMarkersInOutput)
+	{
+		FunctionHead += FString::Printf(TEXT("FStaticJITTestHooks::MarkEntry(0x%xu);\n"), FunctionId);
+	}
+#endif
 
 	// Create the local stack space
 	if (LocalStackSize > 0)
@@ -3741,16 +3780,138 @@ void FAngelscriptStaticJIT::WriteOutputCode(TMap<FString, FString>* OutGenerated
 }
 
 #if WITH_DEV_AUTOMATION_TESTS && AS_CAN_GENERATE_JIT
+namespace
+{
+	bool GenerateStaticJITFilesForTestingInternal(
+		asIScriptModule* Module,
+		TMap<FString, FString>& OutGeneratedFiles,
+		bool bEmitDebugMetadata,
+		bool bEmitTestEntryMarkers,
+		FString* OutError)
+	{
+		OutGeneratedFiles.Reset();
+
+		asCModule* ScriptModule = reinterpret_cast<asCModule*>(Module);
+		if (ScriptModule == nullptr)
+		{
+			if (OutError != nullptr)
+			{
+				*OutError = TEXT("GenerateStaticJITFilesForTesting failed: module was null.");
+			}
+			return false;
+		}
+
+		asCScriptEngine* ScriptEngine = reinterpret_cast<asCScriptEngine*>(ScriptModule->GetEngine());
+		if (ScriptEngine == nullptr)
+		{
+			if (OutError != nullptr)
+			{
+				*OutError = TEXT("GenerateStaticJITFilesForTesting failed: script engine was null.");
+			}
+			return false;
+		}
+
+		FAngelscriptStaticJIT JIT;
+		FAngelscriptPrecompiledData PrecompiledData(ScriptEngine);
+		JIT.PrecompiledData = &PrecompiledData;
+		JIT.bGenerateOutputCode = true;
+		JIT.bEmitDebugMetadataInOutput = bEmitDebugMetadata;
+		JIT.bEmitTestEntryMarkersInOutput = bEmitTestEntryMarkers;
+
+		asIJITCompiler* PreviousJITCompiler = ScriptEngine->GetJITCompiler();
+		ScriptEngine->SetJITCompiler(&JIT);
+		ON_SCOPE_EXIT
+		{
+			ScriptEngine->SetJITCompiler(PreviousJITCompiler);
+		};
+
+		ScriptModule->JITCompile();
+		JIT.WriteOutputCode(&OutGeneratedFiles);
+
+		const TSharedPtr<FJITFile>* JITFile = JIT.JITFiles.Find(ScriptModule);
+		if (JITFile == nullptr || !JITFile->IsValid())
+		{
+			if (OutError != nullptr)
+			{
+				*OutError = TEXT("GenerateStaticJITFilesForTesting failed: module did not produce a JIT file.");
+			}
+			return false;
+		}
+
+		if (!OutGeneratedFiles.Contains((*JITFile)->Filename))
+		{
+			if (OutError != nullptr)
+			{
+				*OutError = FString::Printf(TEXT("GenerateStaticJITFilesForTesting failed: generated source file '%s' was missing."), *(*JITFile)->Filename);
+			}
+			return false;
+		}
+
+		return true;
+	}
+}
+
 bool GenerateStaticJITSourceTextForTesting(asIScriptModule* Module, FString& OutSourceText, bool bEmitDebugMetadata, FString* OutError)
 {
 	OutSourceText.Reset();
+
+	TMap<FString, FString> GeneratedFiles;
+	if (!GenerateStaticJITFilesForTestingInternal(Module, GeneratedFiles, bEmitDebugMetadata, false, OutError))
+	{
+		return false;
+	}
+
+	FString SourceFilename;
+	for (const TPair<FString, FString>& GeneratedFile : GeneratedFiles)
+	{
+		if (GeneratedFile.Key.EndsWith(TEXT(".as.jit.hpp")))
+		{
+			SourceFilename = GeneratedFile.Key;
+			break;
+		}
+	}
+
+	const FString* GeneratedSource = GeneratedFiles.Find(SourceFilename);
+	if (GeneratedSource == nullptr)
+	{
+		if (OutError != nullptr)
+		{
+			*OutError = TEXT("GenerateStaticJITSourceTextForTesting failed: generated module source was missing.");
+		}
+		return false;
+	}
+
+	OutSourceText = *GeneratedSource;
+	return true;
+}
+
+bool GenerateStaticJITFilesForTesting(
+	asIScriptModule* Module,
+	TMap<FString, FString>& OutGeneratedFiles,
+	bool bEmitDebugMetadata,
+	bool bEmitTestEntryMarkers,
+	FString* OutError)
+{
+	return GenerateStaticJITFilesForTestingInternal(Module, OutGeneratedFiles, bEmitDebugMetadata, bEmitTestEntryMarkers, OutError);
+}
+
+bool GenerateStaticJITAotArtifactsForTesting(
+	asIScriptModule* Module,
+	const FString& PrecompiledCacheFilename,
+	const FGuid& PrecompiledDataGuid,
+	TMap<FString, FString>& OutGeneratedFiles,
+	bool bEmitDebugMetadata,
+	bool bEmitTestEntryMarkers,
+	FString* OutError)
+{
+	OutGeneratedFiles.Reset();
 
 	asCModule* ScriptModule = reinterpret_cast<asCModule*>(Module);
 	if (ScriptModule == nullptr)
 	{
 		if (OutError != nullptr)
 		{
-			*OutError = TEXT("GenerateStaticJITSourceTextForTesting failed: module was null.");
+			*OutError = TEXT("GenerateStaticJITAotArtifactsForTesting failed: module was null.");
 		}
 		return false;
 	}
@@ -3760,16 +3921,18 @@ bool GenerateStaticJITSourceTextForTesting(asIScriptModule* Module, FString& Out
 	{
 		if (OutError != nullptr)
 		{
-			*OutError = TEXT("GenerateStaticJITSourceTextForTesting failed: script engine was null.");
+			*OutError = TEXT("GenerateStaticJITAotArtifactsForTesting failed: script engine was null.");
 		}
 		return false;
 	}
 
 	FAngelscriptStaticJIT JIT;
 	FAngelscriptPrecompiledData PrecompiledData(ScriptEngine);
+	PrecompiledData.DataGuid = PrecompiledDataGuid;
 	JIT.PrecompiledData = &PrecompiledData;
 	JIT.bGenerateOutputCode = true;
 	JIT.bEmitDebugMetadataInOutput = bEmitDebugMetadata;
+	JIT.bEmitTestEntryMarkersInOutput = bEmitTestEntryMarkers;
 
 	asIJITCompiler* PreviousJITCompiler = ScriptEngine->GetJITCompiler();
 	ScriptEngine->SetJITCompiler(&JIT);
@@ -3779,31 +3942,18 @@ bool GenerateStaticJITSourceTextForTesting(asIScriptModule* Module, FString& Out
 	};
 
 	ScriptModule->JITCompile();
-
-	TMap<FString, FString> GeneratedFiles;
-	JIT.WriteOutputCode(&GeneratedFiles);
-
-	const TSharedPtr<FJITFile>* JITFile = JIT.JITFiles.Find(ScriptModule);
-	if (JITFile == nullptr || !JITFile->IsValid())
+	PrecompiledData.InitFromActiveScript();
+	JIT.WriteOutputCode(&OutGeneratedFiles);
+	if (OutGeneratedFiles.Num() == 0)
 	{
 		if (OutError != nullptr)
 		{
-			*OutError = TEXT("GenerateStaticJITSourceTextForTesting failed: module did not produce a JIT file.");
+			*OutError = TEXT("GenerateStaticJITAotArtifactsForTesting failed: no generated files were produced.");
 		}
 		return false;
 	}
 
-	const FString* GeneratedSource = GeneratedFiles.Find((*JITFile)->Filename);
-	if (GeneratedSource == nullptr)
-	{
-		if (OutError != nullptr)
-		{
-			*OutError = FString::Printf(TEXT("GenerateStaticJITSourceTextForTesting failed: generated source file '%s' was missing."), *(*JITFile)->Filename);
-		}
-		return false;
-	}
-
-	OutSourceText = *GeneratedSource;
+	PrecompiledData.Save(PrecompiledCacheFilename);
 	return true;
 }
 #endif

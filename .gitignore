@@ -81,6 +81,7 @@ DerivedDataCache/
 
 # Plugin-generated cache
 BindModules.Cache
+Source/AngelscriptTest/StaticJIT/AOT/Generated/StaticJITAotFixture.Cache
 
 # Misc temp/log files
 *.tmp
