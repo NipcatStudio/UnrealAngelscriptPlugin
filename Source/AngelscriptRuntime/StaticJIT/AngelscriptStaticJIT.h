@@ -25,10 +25,10 @@ struct FJITDatabase
 	};
 
 	TMap<uint32, FJITFunctions> Functions;
-	TArray<void**> FunctionLookups;
-	TArray<void*> SystemFunctionPointerLookups;
-	TArray<void**> GlobalVarLookups;
-	TArray<void**> TypeInfoLookups;
+	TArray<struct FJitRef_Function*> FunctionLookups;
+	TArray<struct FJitRef_SystemFunctionPointer*> SystemFunctionPointerLookups;
+	TArray<struct FJitRef_GlobalVar*> GlobalVarLookups;
+	TArray<struct FJitRef_Type*> TypeInfoLookups;
 	TArray<TPair<uint64, uint32*>> PropertyOffsetLookups;
 
 #if AS_JIT_VERIFY_PROPERTY_OFFSETS
@@ -51,6 +51,7 @@ struct FJITFile
 	TSet<FString> Headers;
 	TSet<FString> SharedHeaderDependencies;
 	TMap<void*, FString> ExternalDeclarations;
+	TMap<asCScriptFunction*, FString> ExternalSystemFunctionPointerDeclarations;
 	TSet<asCScriptFunction*> ExternFunctions;
 };
 
@@ -424,6 +425,7 @@ struct FAngelscriptStaticJIT : public asIJITCompiler
 	bool IsFunctionAlwaysJIT(asCScriptFunction* VirtualFunction);
 
 	TMap<void*, FString> ExternalReferenceNames;
+	TMap<asCScriptFunction*, FString> ExternalSystemFunctionPointerReferenceNames;
 	TSet<void*> VerifiedExternalReferences;
 
 	FJITFile& GetFile(asIScriptModule* Module);

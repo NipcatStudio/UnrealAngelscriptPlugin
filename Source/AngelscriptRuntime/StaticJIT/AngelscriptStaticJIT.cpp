@@ -75,6 +75,47 @@ bool FStaticJITTestHooks::IsFunctionRegistered(uint32 FunctionId)
 {
 	return FJITDatabase::Get().Functions.Contains(FunctionId);
 }
+
+bool FStaticJITTestHooks::ReferenceGlobalVariableTwice(FAngelscriptPrecompiledData& Data, void* GlobalPtr, int64& OutFirstReference, int64& OutReusedReference, FString& OutFirstName, FString& OutReusedName)
+{
+	const FAngelscriptPrecompiledReference FirstReference = Data.ReferenceGlobalVariable(GlobalPtr, &OutFirstName);
+	const FAngelscriptPrecompiledReference ReusedReference = Data.ReferenceGlobalVariable(GlobalPtr, &OutReusedName);
+	OutFirstReference = FirstReference.OldReference;
+	OutReusedReference = ReusedReference.OldReference;
+	return OutFirstReference != 0 && OutFirstReference == OutReusedReference && !OutReusedName.IsEmpty();
+}
+
+bool FStaticJITTestHooks::ExerciseRepeatedGlobalReferenceLoad(FAngelscriptPrecompiledData& Data, const FString& CacheFilename, int64 GlobalReference, void*& OutFirstResolvedAddress, void*& OutSecondResolvedAddress, bool& bOutCacheClearedAfterLoad)
+{
+	OutFirstResolvedAddress = nullptr;
+	OutSecondResolvedAddress = nullptr;
+	bOutCacheClearedAfterLoad = false;
+
+	const FAngelscriptPrecompiledReference Reference{ GlobalReference };
+	OutFirstResolvedAddress = Data.GetGlobalVariable(Reference);
+	if (OutFirstResolvedAddress == nullptr)
+	{
+		return false;
+	}
+
+	FJitRef_GlobalVar JitRef(static_cast<uint64>(GlobalReference));
+	ON_SCOPE_EXIT
+	{
+		FJITDatabase::Get().GlobalVarLookups.RemoveSingleSwap(&JitRef);
+	};
+
+	JitRef.Pointer = reinterpret_cast<void*>(0x1);
+	JitRef.Pointer = Data.GetGlobalVariable(Reference);
+	if (JitRef.Get() != OutFirstResolvedAddress)
+	{
+		return false;
+	}
+
+	Data.Load(CacheFilename);
+	bOutCacheClearedAfterLoad = !Data.CachedPointerReferences.Contains(GlobalReference);
+	OutSecondResolvedAddress = Data.GetGlobalVariable(Reference);
+	return bOutCacheClearedAfterLoad && OutSecondResolvedAddress == OutFirstResolvedAddress;
+}
 #endif
 
 asCString GetScriptClassName(asITypeInfo* Type)
@@ -1663,17 +1704,18 @@ FString FStaticJITContext::ReferenceFunction(asCScriptFunction* Function)
 
 FString FStaticJITContext::ReferenceSystemFunctionPointer(asCScriptFunction* Function)
 {
-	void* SystemFunctionPtr = (void*)Function->sysFuncIntf->func;
-	FString* ExistingName = JIT->ExternalReferenceNames.Find(SystemFunctionPtr);
+	// Use script-function identity, not raw sysFuncIntf->func, since multiple
+	// AS functions can share a native entry but require distinct JIT refs.
+	FString* ExistingName = JIT->ExternalSystemFunctionPointerReferenceNames.Find(Function);
 
 	if (ExistingName != nullptr)
 	{
 		// Existing reference, see if we've already imported it into our file
-		if (!File->ExternalDeclarations.Contains(SystemFunctionPtr))
+		if (!File->ExternalSystemFunctionPointerDeclarations.Contains(Function))
 		{
 			// Need to forward declare it in our file before we can use it
-			File->ExternalDeclarations.Add(
-				SystemFunctionPtr,
+			File->ExternalSystemFunctionPointerDeclarations.Add(
+				Function,
 				FString::Printf(
 					TEXT("extern FJitRef_SystemFunctionPointer %s;"),
 					**ExistingName
@@ -1709,8 +1751,8 @@ FString FStaticJITContext::ReferenceSystemFunctionPointer(asCScriptFunction* Fun
 		auto Ref = JIT->PrecompiledData->ReferenceFunction(Function);
 
 		FString Decl = FString::Printf(TEXT("AS_FORCE_LINK FJitRef_SystemFunctionPointer %s(0x%llx);"), *SymbolName, Ref.OldReference);
-		File->ExternalDeclarations.Add(SystemFunctionPtr, Decl);
-		JIT->ExternalReferenceNames.Add(SystemFunctionPtr, SymbolName);
+		File->ExternalSystemFunctionPointerDeclarations.Add(Function, Decl);
+		JIT->ExternalSystemFunctionPointerReferenceNames.Add(Function, SymbolName);
 
 		return SymbolName;
 	}
@@ -3649,6 +3691,10 @@ void FAngelscriptStaticJIT::WriteOutputCode(TMap<FString, FString>* OutGenerated
 			FullContent.Append(FString::Printf(TEXT("#include \"%s\"\n"), *Content));
 		FullContent += TEXT("\n");
 		for (auto& Elem : File.ExternalDeclarations)
+		{
+			FullContent.Append(Elem.Value + "\n");
+		}
+		for (auto& Elem : File.ExternalSystemFunctionPointerDeclarations)
 		{
 			FullContent.Append(Elem.Value + "\n");
 		}

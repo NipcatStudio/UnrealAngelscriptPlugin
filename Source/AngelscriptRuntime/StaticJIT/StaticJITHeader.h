@@ -99,6 +99,8 @@ struct ANGELSCRIPTRUNTIME_API FStaticJITFunction
 	FORCENOINLINE static void SetUnknownException(FScriptExecution& Execution);
 };
 
+struct FAngelscriptPrecompiledData;
+
 #if WITH_DEV_AUTOMATION_TESTS
 struct ANGELSCRIPTRUNTIME_API FStaticJITTestHooks
 {
@@ -106,18 +108,24 @@ struct ANGELSCRIPTRUNTIME_API FStaticJITTestHooks
 	static void MarkEntry(uint32 FunctionId);
 	static int32 GetEntryCount(uint32 FunctionId);
 	static bool IsFunctionRegistered(uint32 FunctionId);
+	static bool ReferenceGlobalVariableTwice(FAngelscriptPrecompiledData& Data, void* GlobalPtr, int64& OutFirstReference, int64& OutReusedReference, FString& OutFirstName, FString& OutReusedName);
+	static bool ExerciseRepeatedGlobalReferenceLoad(FAngelscriptPrecompiledData& Data, const FString& CacheFilename, int64 GlobalReference, void*& OutFirstResolvedAddress, void*& OutSecondResolvedAddress, bool& bOutCacheClearedAfterLoad);
 };
 #endif
 
-struct FJitRef_Function
+struct ANGELSCRIPTRUNTIME_API FJitRef_Function
 {
+	// Stable precompiled reference used to resolve Pointer for the current engine/module lifetime.
+	uint64 Reference;
 	void* Pointer;
 	FJitRef_Function(uint64 FunctionRef);
 	FORCEINLINE asCScriptFunction* Get() const { return (asCScriptFunction*)Pointer;  }
 };
 
-struct FJitRef_SystemFunctionPointer
+struct ANGELSCRIPTRUNTIME_API FJitRef_SystemFunctionPointer
 {
+	// Stable precompiled function reference used to refresh the native function pointer.
+	uint64 Reference;
 	union
 	{
 		asFUNCTION_t Func;
@@ -130,22 +138,26 @@ struct FJitRef_SystemFunctionPointer
 	FORCEINLINE asMETHOD_t GetMethod() const { return Method;  }
 };
 
-struct FJitRef_Type
+struct ANGELSCRIPTRUNTIME_API FJitRef_Type
 {
+	// Stable precompiled reference used to resolve Pointer for the current engine/module lifetime.
+	uint64 Reference;
 	void* Pointer;
 	FJitRef_Type(uint64 TypeRef);
 	FORCEINLINE asCTypeInfo* Get() const { return (asCTypeInfo*)Pointer;  }
 	FORCEINLINE asCObjectType* GetObjectType() const { return (asCObjectType*)Pointer;  }
 };
 
-struct FJitRef_GlobalVar
+struct ANGELSCRIPTRUNTIME_API FJitRef_GlobalVar
 {
+	// Stable precompiled reference used to resolve Pointer for the current engine/module lifetime.
+	uint64 Reference;
 	void* Pointer;
 	FJitRef_GlobalVar(uint64 GlobalRef);
 	FORCEINLINE void* Get() const { return Pointer;  }
 };
 
-struct FJitRef_PropertyOffset
+struct ANGELSCRIPTRUNTIME_API FJitRef_PropertyOffset
 {
 	uint32 Offset;
 
@@ -153,7 +165,7 @@ struct FJitRef_PropertyOffset
 	FORCEINLINE uint32 Get() const { return Offset;  }
 };
 
-struct FJitVerifyPropertyOffset
+struct ANGELSCRIPTRUNTIME_API FJitVerifyPropertyOffset
 {
 #if AS_JIT_VERIFY_PROPERTY_OFFSETS
 	FJitVerifyPropertyOffset(uint64 PropertyRef, SIZE_T ComputedOffset);
@@ -162,7 +174,7 @@ struct FJitVerifyPropertyOffset
 #endif
 };
 
-struct FJitVerifyTypeSize
+struct ANGELSCRIPTRUNTIME_API FJitVerifyTypeSize
 {
 #if AS_JIT_VERIFY_PROPERTY_OFFSETS
 	FJitVerifyTypeSize(uint64 TypeRef, SIZE_T ComputedSize, SIZE_T ComputedAlignment);

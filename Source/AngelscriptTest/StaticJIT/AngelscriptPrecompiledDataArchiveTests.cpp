@@ -3,6 +3,7 @@
 #include "Shared/AngelscriptTestEngineHelper.h"
 #include "Shared/AngelscriptTestMacros.h"
 #include "StaticJIT/PrecompiledData.h"
+#include "StaticJIT/StaticJITHeader.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -102,12 +103,75 @@ namespace AngelscriptTest_StaticJIT_AngelscriptPrecompiledDataArchiveTests_Priva
 			TEXT("StaticJIT.PrecompiledData.BuildIdentifierValidation should discard the stale cache before later precompiled-data use"),
 			PrecompiledData.Get());
 	}
+
+	asIScriptModule* FindCompiledModule(FAutomationTestBase& Test, FAngelscriptEngine& Engine, FName InModuleName)
+	{
+		TSharedPtr<FAngelscriptModuleDesc> ModuleDesc = Engine.GetModuleByModuleName(InModuleName.ToString());
+		if (!ModuleDesc.IsValid() || ModuleDesc->ScriptModule == nullptr)
+		{
+			Test.AddError(FString::Printf(TEXT("StaticJIT.PrecompiledData should resolve compiled module '%s'."), *InModuleName.ToString()));
+			return nullptr;
+		}
+
+		return ModuleDesc->ScriptModule;
+	}
+
+	void* FindGlobalVariableAddress(FAutomationTestBase& Test, asIScriptModule* Module, const char* GlobalName)
+	{
+		if (Module == nullptr)
+		{
+			return nullptr;
+		}
+
+		const asUINT GlobalCount = Module->GetGlobalVarCount();
+		for (asUINT GlobalIndex = 0; GlobalIndex < GlobalCount; ++GlobalIndex)
+		{
+			const char* CandidateName = nullptr;
+			if (Module->GetGlobalVar(GlobalIndex, &CandidateName) >= 0
+				&& CandidateName != nullptr
+				&& FCStringAnsi::Strcmp(CandidateName, GlobalName) == 0)
+			{
+				return Module->GetAddressOfGlobalVar(GlobalIndex);
+			}
+		}
+
+		Test.AddError(FString::Printf(TEXT("StaticJIT.PrecompiledData should resolve global variable '%s'."), ANSI_TO_TCHAR(GlobalName)));
+		return nullptr;
+	}
+
+	bool CompileGlobalReferenceFixture(FAutomationTestBase& Test, FAngelscriptEngine& Engine, FName InModuleName, const TCHAR* InSourceFilename)
+	{
+		const FString ScriptSource =
+			TEXT("const int ReferencedGlobal = 10;\n")
+			TEXT("int Entry()\n")
+			TEXT("{\n")
+			TEXT("    return ReferencedGlobal + 1;\n")
+			TEXT("}\n");
+
+		return Test.TestTrue(
+			TEXT("StaticJIT.PrecompiledData global-reference fixture should compile"),
+			AngelscriptTestSupport::CompileModuleFromMemory(
+				&Engine,
+				InModuleName,
+				InSourceFilename,
+				ScriptSource));
+	}
 }
 
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FAngelscriptPrecompiledDataBuildIdentifierValidationTest,
 	"Angelscript.TestModule.StaticJIT.PrecompiledData.BuildIdentifierValidation",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAngelscriptPrecompiledDataGlobalReferenceNameReuseTest,
+	"Angelscript.TestModule.StaticJIT.PrecompiledData.GlobalReferenceNameReuse",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAngelscriptPrecompiledDataRepeatedLoadClearsRuntimeCacheTest,
+	"Angelscript.TestModule.StaticJIT.PrecompiledData.RepeatedLoadClearsRuntimeCache",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FAngelscriptPrecompiledDataBuildIdentifierValidationTest::RunTest(const FString& Parameters)
@@ -210,6 +274,131 @@ bool FAngelscriptPrecompiledDataBuildIdentifierValidationTest::RunTest(const FSt
 
 	}
 	return bPassed;
+}
+
+bool FAngelscriptPrecompiledDataGlobalReferenceNameReuseTest::RunTest(const FString& Parameters)
+{
+	using namespace AngelscriptTest_StaticJIT_AngelscriptPrecompiledDataArchiveTests_Private;
+
+	FAngelscriptEngine& Engine = ASTEST_CREATE_ENGINE_FULL();
+	FAngelscriptEngineScope EngineScope(Engine);
+	ON_SCOPE_EXIT
+	{
+		const TArray<TSharedRef<FAngelscriptModuleDesc>> ActiveModules = Engine.GetActiveModules();
+		for (const TSharedRef<FAngelscriptModuleDesc>& Module : ActiveModules)
+		{
+			Engine.DiscardModule(*Module->ModuleName);
+		}
+	};
+
+	const FName FixtureModuleName(TEXT("ASPrecompiledDataGlobalReferenceNameReuse"));
+	if (!CompileGlobalReferenceFixture(*this, Engine, FixtureModuleName, TEXT("PrecompiledDataGlobalReferenceNameReuse.as")))
+	{
+		return false;
+	}
+
+	asIScriptModule* Module = FindCompiledModule(*this, Engine, FixtureModuleName);
+	void* GlobalAddress = FindGlobalVariableAddress(*this, Module, "ReferencedGlobal");
+	if (!TestNotNull(TEXT("StaticJIT.PrecompiledData.GlobalReferenceNameReuse should find the global address"), GlobalAddress))
+	{
+		return false;
+	}
+
+	FAngelscriptPrecompiledData Snapshot(Engine.GetScriptEngine());
+	Snapshot.InitFromActiveScript();
+
+	int64 FirstReference = 0;
+	int64 ReusedReference = 0;
+	FString FirstName;
+	FString ReusedName;
+	if (!TestTrue(
+			TEXT("StaticJIT.PrecompiledData.GlobalReferenceNameReuse should resolve and reuse a global reference"),
+			FStaticJITTestHooks::ReferenceGlobalVariableTwice(Snapshot, GlobalAddress, FirstReference, ReusedReference, FirstName, ReusedName)))
+	{
+		return false;
+	}
+
+	TestEqual(TEXT("StaticJIT.PrecompiledData.GlobalReferenceNameReuse should reuse the same reference id"), ReusedReference, FirstReference);
+	TestEqual(TEXT("StaticJIT.PrecompiledData.GlobalReferenceNameReuse should return the stable name when an existing global reference is reused"), ReusedName, FirstName);
+	TestEqual(TEXT("StaticJIT.PrecompiledData.GlobalReferenceNameReuse should keep the script global name stable"), ReusedName, TEXT("ReferencedGlobal"));
+	return true;
+}
+
+bool FAngelscriptPrecompiledDataRepeatedLoadClearsRuntimeCacheTest::RunTest(const FString& Parameters)
+{
+	using namespace AngelscriptTest_StaticJIT_AngelscriptPrecompiledDataArchiveTests_Private;
+
+	FAngelscriptEngine& Engine = ASTEST_CREATE_ENGINE_FULL();
+	FAngelscriptEngineScope EngineScope(Engine);
+	ON_SCOPE_EXIT
+	{
+		const TArray<TSharedRef<FAngelscriptModuleDesc>> ActiveModules = Engine.GetActiveModules();
+		for (const TSharedRef<FAngelscriptModuleDesc>& Module : ActiveModules)
+		{
+			Engine.DiscardModule(*Module->ModuleName);
+		}
+	};
+
+	const FName FixtureModuleName(TEXT("ASPrecompiledDataRepeatedLoadClearsRuntimeCache"));
+	if (!CompileGlobalReferenceFixture(*this, Engine, FixtureModuleName, TEXT("PrecompiledDataRepeatedLoadClearsRuntimeCache.as")))
+	{
+		return false;
+	}
+
+	asIScriptModule* Module = FindCompiledModule(*this, Engine, FixtureModuleName);
+	void* GlobalAddress = FindGlobalVariableAddress(*this, Module, "ReferencedGlobal");
+	if (!TestNotNull(TEXT("StaticJIT.PrecompiledData.RepeatedLoadClearsRuntimeCache should find the global address"), GlobalAddress))
+	{
+		return false;
+	}
+
+	FAngelscriptPrecompiledData Snapshot(Engine.GetScriptEngine());
+	Snapshot.InitFromActiveScript();
+	int64 GlobalReference = 0;
+	int64 ReusedReference = 0;
+	FString FirstName;
+	FString ReusedName;
+	if (!TestTrue(
+			TEXT("StaticJIT.PrecompiledData.RepeatedLoadClearsRuntimeCache should resolve a stable global reference"),
+			FStaticJITTestHooks::ReferenceGlobalVariableTwice(Snapshot, GlobalAddress, GlobalReference, ReusedReference, FirstName, ReusedName)))
+	{
+		return false;
+	}
+
+	AngelscriptTestSupport::FScopedTempPrecompiledCacheFile CacheFile(TEXT("PrecompiledDataRepeatedLoadClearsRuntimeCache"));
+	TUniquePtr<FAngelscriptPrecompiledData> LoadedData;
+	FString SaveAndReloadError;
+	if (!TestTrue(
+			TEXT("StaticJIT.PrecompiledData.RepeatedLoadClearsRuntimeCache should roundtrip the fixture cache"),
+			AngelscriptTestSupport::SaveAndReloadPrecompiledData(&Engine, Snapshot, CacheFile.GetFilename(), LoadedData, &SaveAndReloadError)))
+	{
+		if (!SaveAndReloadError.IsEmpty())
+		{
+			AddError(SaveAndReloadError);
+		}
+		return false;
+	}
+
+	if (!TestNotNull(TEXT("StaticJIT.PrecompiledData.RepeatedLoadClearsRuntimeCache should load precompiled data"), LoadedData.Get()))
+	{
+		return false;
+	}
+
+	void* FirstResolvedAddress = nullptr;
+	void* SecondResolvedAddress = nullptr;
+	bool bCacheClearedAfterLoad = false;
+	if (!TestTrue(
+			TEXT("StaticJIT.PrecompiledData.RepeatedLoadClearsRuntimeCache should re-resolve JIT refs and clear pointer cache after repeated Load"),
+			FStaticJITTestHooks::ExerciseRepeatedGlobalReferenceLoad(*LoadedData, CacheFile.GetFilename(), GlobalReference, FirstResolvedAddress, SecondResolvedAddress, bCacheClearedAfterLoad)))
+	{
+		return false;
+	}
+
+	TestTrue(TEXT("StaticJIT.PrecompiledData.RepeatedLoadClearsRuntimeCache should clear pointer cache on repeated Load"), bCacheClearedAfterLoad);
+	TestTrue(
+		TEXT("StaticJIT.PrecompiledData.RepeatedLoadClearsRuntimeCache should re-resolve globals after repeated Load"),
+		SecondResolvedAddress == FirstResolvedAddress);
+	return true;
 }
 
 #endif

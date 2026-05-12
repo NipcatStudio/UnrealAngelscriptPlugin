@@ -15,7 +15,7 @@ namespace AngelscriptStaticJITAotGeneration
 	{
 		bool CompileFixture(FAngelscriptEngine& Engine, FStaticJITAotGenerationResult& Result)
 		{
-			const bool bCompiled = AngelscriptTestSupport::CompileModuleFromMemory(
+			const bool bCompiled = AngelscriptTestSupport::CompileAnnotatedModuleFromMemory(
 				&Engine,
 				AngelscriptStaticJITAotFixture::GetModuleName(),
 				AngelscriptStaticJITAotFixture::GetSourceFilename(),
@@ -179,6 +179,32 @@ namespace AngelscriptStaticJITAotGeneration
 			return nullptr;
 		}
 
+		const FAngelscriptPrecompiledClass* FindClassByName(const FAngelscriptPrecompiledModule& Module, const FString& ClassName)
+		{
+			for (const FAngelscriptPrecompiledClass& Class : Module.Classes)
+			{
+				if (Class.ClassName.UnrealString() == ClassName)
+				{
+					return &Class;
+				}
+			}
+
+			return nullptr;
+		}
+
+		const FAngelscriptPrecompiledFunction* FindMethodByName(const FAngelscriptPrecompiledClass& Class, const FString& FunctionName)
+		{
+			for (const FAngelscriptPrecompiledFunction& Method : Class.Methods)
+			{
+				if (Method.FunctionName.UnrealString() == FunctionName)
+				{
+					return &Method;
+				}
+			}
+
+			return nullptr;
+		}
+
 		bool VerifyPrecompiledCacheSemantics(FAngelscriptEngine& Engine, const FString& LocalCacheFilename, const FString& GeneratedCacheFilename, FString& OutError)
 		{
 			if (!IFileManager::Get().FileExists(*LocalCacheFilename))
@@ -245,6 +271,7 @@ namespace AngelscriptStaticJITAotGeneration
 			{
 				TEXT("AddForAOT"),
 				TEXT("Entry"),
+				TEXT("StaticWorldContextCheck"),
 			};
 
 			for (const FString& FunctionName : RequiredFunctions)
@@ -264,7 +291,119 @@ namespace AngelscriptStaticJITAotGeneration
 				}
 			}
 
+			const FString RequiredClassName = AngelscriptStaticJITAotFixture::GetGeneratedClassName().ToString();
+			const FAngelscriptPrecompiledClass* LocalClass = FindClassByName(*LocalModule, RequiredClassName);
+			const FAngelscriptPrecompiledClass* GeneratedClass = FindClassByName(*GeneratedModule, RequiredClassName);
+			if (LocalClass == nullptr || GeneratedClass == nullptr)
+			{
+				OutError = FString::Printf(TEXT("StaticJIT AOT cache does not contain fixture class '%s'."), *RequiredClassName);
+				return false;
+			}
+
+			const TArray<FString> RequiredMethods =
+			{
+				TEXT("StorePrimitiveArg"),
+				TEXT("ReturnPrimitive"),
+				TEXT("BumpReference"),
+				TEXT("ReturnSelfObject"),
+			};
+
+			for (const FString& MethodName : RequiredMethods)
+			{
+				const FAngelscriptPrecompiledFunction* LocalMethod = FindMethodByName(*LocalClass, MethodName);
+				const FAngelscriptPrecompiledFunction* GeneratedMethod = FindMethodByName(*GeneratedClass, MethodName);
+				if (LocalMethod == nullptr || GeneratedMethod == nullptr)
+				{
+					OutError = FString::Printf(TEXT("StaticJIT AOT cache does not contain fixture method '%s::%s'."), *RequiredClassName, *MethodName);
+					return false;
+				}
+
+				if (!IsSamePrecompiledFunction(*LocalMethod, *GeneratedMethod))
+				{
+					OutError = FString::Printf(TEXT("StaticJIT AOT cache fixture method '%s::%s' differs from regenerated output."), *RequiredClassName, *MethodName);
+					return false;
+				}
+			}
+
 			return true;
+		}
+
+		void NormalizeConstructorArguments(FString& Content, const FString& Prefix, bool bOnlyFirstArgument)
+		{
+			int32 SearchIndex = 0;
+			while (SearchIndex < Content.Len())
+			{
+				const int32 PrefixIndex = Content.Find(Prefix, ESearchCase::CaseSensitive, ESearchDir::FromStart, SearchIndex);
+				if (PrefixIndex == INDEX_NONE)
+				{
+					break;
+				}
+
+				const int32 OpenParenIndex = Content.Find(TEXT("("), ESearchCase::CaseSensitive, ESearchDir::FromStart, PrefixIndex + Prefix.Len());
+				const int32 CloseParenIndex = OpenParenIndex == INDEX_NONE
+					? INDEX_NONE
+					: Content.Find(TEXT(")"), ESearchCase::CaseSensitive, ESearchDir::FromStart, OpenParenIndex + 1);
+				if (OpenParenIndex == INDEX_NONE || CloseParenIndex == INDEX_NONE)
+				{
+					SearchIndex = PrefixIndex + Prefix.Len();
+					continue;
+				}
+
+				int32 ReplaceEndIndex = CloseParenIndex;
+				if (bOnlyFirstArgument)
+				{
+					const int32 CommaIndex = Content.Find(TEXT(","), ESearchCase::CaseSensitive, ESearchDir::FromStart, OpenParenIndex + 1);
+					ReplaceEndIndex = CommaIndex == INDEX_NONE || CommaIndex > CloseParenIndex
+						? INDEX_NONE
+						: CommaIndex;
+				}
+
+				if (ReplaceEndIndex == INDEX_NONE)
+				{
+					SearchIndex = PrefixIndex + Prefix.Len();
+					continue;
+				}
+
+				const FString StablePlaceholder = TEXT("STATIC_JIT_REFERENCE");
+				Content.RemoveAt(OpenParenIndex + 1, ReplaceEndIndex - OpenParenIndex - 1, EAllowShrinking::No);
+				Content.InsertAt(OpenParenIndex + 1, StablePlaceholder);
+				SearchIndex = OpenParenIndex + StablePlaceholder.Len() + 2;
+			}
+		}
+
+		FString NormalizeGeneratedFileForComparison(const FString& Filename, const FString& Content)
+		{
+			if (!Filename.EndsWith(TEXT(".jit.hpp")))
+			{
+				return Content;
+			}
+
+			FString Normalized = Content;
+			const TArray<FString> SingleArgumentRefPrefixes =
+			{
+				TEXT("AS_FORCE_LINK FJitRef_Function "),
+				TEXT("AS_FORCE_LINK FJitRef_SystemFunctionPointer "),
+				TEXT("AS_FORCE_LINK FJitRef_Type "),
+				TEXT("AS_FORCE_LINK FJitRef_GlobalVar "),
+			};
+
+			for (const FString& Prefix : SingleArgumentRefPrefixes)
+			{
+				NormalizeConstructorArguments(Normalized, Prefix, /*bOnlyFirstArgument=*/false);
+			}
+
+			const TArray<FString> FirstArgumentRefPrefixes =
+			{
+				TEXT("AS_FORCE_LINK FJitVerifyPropertyOffset "),
+				TEXT("AS_FORCE_LINK FJitVerifyTypeSize "),
+			};
+
+			for (const FString& Prefix : FirstArgumentRefPrefixes)
+			{
+				NormalizeConstructorArguments(Normalized, Prefix, /*bOnlyFirstArgument=*/true);
+			}
+
+			return Normalized;
 		}
 
 		bool VerifyGeneratedFiles(FAngelscriptEngine& Engine, const TMap<FString, FString>& GeneratedFiles, const FString& GeneratedCacheFilename, FStaticJITAotGenerationResult& Result)
@@ -274,7 +413,8 @@ namespace AngelscriptStaticJITAotGeneration
 			{
 				const FString OutputPath = FPaths::Combine(GeneratedDirectory, GeneratedFile.Key);
 				FString ExistingContent;
-				if (!FFileHelper::LoadFileToString(ExistingContent, *OutputPath) || ExistingContent != GeneratedFile.Value)
+				if (!FFileHelper::LoadFileToString(ExistingContent, *OutputPath)
+					|| NormalizeGeneratedFileForComparison(GeneratedFile.Key, ExistingContent) != NormalizeGeneratedFileForComparison(GeneratedFile.Key, GeneratedFile.Value))
 				{
 					Result.StaleFiles.Add(OutputPath);
 				}

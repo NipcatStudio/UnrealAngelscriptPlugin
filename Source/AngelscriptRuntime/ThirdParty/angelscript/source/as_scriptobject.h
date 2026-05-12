@@ -79,10 +79,10 @@ protected:
 	DECLARECRITICALSECTION(mutable lock)
 };
 
-void ScriptObject_Construct(asCObjectType *objType, asCScriptObject *self);
-asCScriptObject &ScriptObject_Assignment(asCScriptObject *other, asCScriptObject *self);
+ANGELSCRIPTRUNTIME_API void ScriptObject_Construct(asCObjectType *objType, asCScriptObject *self);
+ANGELSCRIPTRUNTIME_API asCScriptObject &ScriptObject_Assignment(asCScriptObject *other, asCScriptObject *self);
 
-void ScriptObject_ConstructUnitialized(asCObjectType *objType, asCScriptObject *self);
+ANGELSCRIPTRUNTIME_API void ScriptObject_ConstructUnitialized(asCObjectType *objType, asCScriptObject *self);
 
 void RegisterScriptObject(asCScriptEngine *engine);
 

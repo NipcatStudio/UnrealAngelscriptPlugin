@@ -48,14 +48,16 @@ FStaticJITFunction::FStaticJITFunction(uint32 FunctionId, asJITFunction InVMEntr
 
 FJitRef_Function::FJitRef_Function(uint64 FunctionRef)
 {
+	Reference = FunctionRef;
 	Pointer = (void*)FunctionRef;
 
 	auto& JITDatabase = FJITDatabase::Get();
-	JITDatabase.FunctionLookups.Add(&Pointer);
+	JITDatabase.FunctionLookups.Add(this);
 }
 
 FJitRef_SystemFunctionPointer::FJitRef_SystemFunctionPointer(uint64 FunctionRef)
 {
+	Reference = FunctionRef;
 	Pointer = (void*)FunctionRef;
 
 	auto& JITDatabase = FJITDatabase::Get();
@@ -64,18 +66,20 @@ FJitRef_SystemFunctionPointer::FJitRef_SystemFunctionPointer(uint64 FunctionRef)
 
 FJitRef_Type::FJitRef_Type(uint64 TypeRef)
 {
+	Reference = TypeRef;
 	Pointer = (void*)TypeRef;
 
 	auto& JITDatabase = FJITDatabase::Get();
-	JITDatabase.TypeInfoLookups.Add(&Pointer);
+	JITDatabase.TypeInfoLookups.Add(this);
 }
 
 FJitRef_GlobalVar::FJitRef_GlobalVar(uint64 GlobalRef)
 {
+	Reference = GlobalRef;
 	Pointer = (void*)GlobalRef;
 
 	auto& JITDatabase = FJITDatabase::Get();
-	JITDatabase.GlobalVarLookups.Add(&Pointer);
+	JITDatabase.GlobalVarLookups.Add(this);
 }
 
 FJitRef_PropertyOffset::FJitRef_PropertyOffset(uint64 PropertyRef)

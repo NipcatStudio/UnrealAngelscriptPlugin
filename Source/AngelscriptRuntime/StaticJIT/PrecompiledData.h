@@ -342,6 +342,7 @@ struct FAngelscriptPrecompiledClass
 	void CreateFunctions(FAngelscriptPrecompiledData& Context, asCObjectType* Type) const;
 	void PreProcessFunctions(FAngelscriptPrecompiledData& Context, asCObjectType* Type) const;
 	void ProcessFunctions(FAngelscriptPrecompiledData& Context, asCObjectType* Type) const;
+	void ResetRuntimeState() const;
 };
 
 struct FAngelscriptPrecompiledEnum
@@ -467,6 +468,7 @@ struct FAngelscriptPrecompiledModule
 	void ApplyToModule_Stage1(FAngelscriptPrecompiledData& Context, class asIScriptModule* Module) const;
 	void ApplyToModule_Stage2(FAngelscriptPrecompiledData& Context, class asIScriptModule* Module) const;
 	void ApplyToModule_Stage3(FAngelscriptPrecompiledData& Context, class asIScriptModule* Module) const;
+	void ResetRuntimeState() const;
 };
 
 struct FAngelscriptTypeReference
@@ -616,6 +618,8 @@ struct FAngelscriptPrecompiledData
 
 	void PrepareToFinalizePrecompiledModules();
 	void ClearUnneededRuntimeData();
+	// Clears resolved runtime pointers and lookup caches, while preserving serialized archive data.
+	void ResetRuntimeState();
 
 	// Serve loaded data that would normally come from preprocessor
 	TArray<TSharedRef<FAngelscriptModuleDesc>> GetModulesToCompile();

@@ -1181,13 +1181,19 @@ void FAngelscriptPrecompiledClass::ProcessFunctions(FAngelscriptPrecompiledData&
 	// Fill out behavior functions
 	int32 BehIndex = 0;
 	auto& beh = Type->beh;
-	beh.factory = Context.GetFunctionId(BehaviorRefs[BehIndex++]);
-	beh.listFactory = Context.GetFunctionId(BehaviorRefs[BehIndex++]);
-	beh.copyfactory = Context.GetFunctionId(BehaviorRefs[BehIndex++]);
-	beh.construct = Context.GetFunctionId(BehaviorRefs[BehIndex++]);
-	beh.copyconstruct = Context.GetFunctionId(BehaviorRefs[BehIndex++]);
-	beh.destruct = Context.GetFunctionId(BehaviorRefs[BehIndex++]);
-	beh.copy = Context.GetFunctionId(BehaviorRefs[BehIndex++]);
+	// Behavior slots own references just like the normal builder path, and
+	// ClearUnneededRuntimeData() keeps only functions marked as in use.
+	auto RestoreBehavior = [&Context](const FAngelscriptPrecompiledReference& Reference)
+	{
+		return Context.GetFunctionId(Reference, true, true);
+	};
+	beh.factory = RestoreBehavior(BehaviorRefs[BehIndex++]);
+	beh.listFactory = RestoreBehavior(BehaviorRefs[BehIndex++]);
+	beh.copyfactory = RestoreBehavior(BehaviorRefs[BehIndex++]);
+	beh.construct = RestoreBehavior(BehaviorRefs[BehIndex++]);
+	beh.copyconstruct = RestoreBehavior(BehaviorRefs[BehIndex++]);
+	beh.destruct = RestoreBehavior(BehaviorRefs[BehIndex++]);
+	beh.copy = RestoreBehavior(BehaviorRefs[BehIndex++]);
 
 	// Process functions
 	bool bIsStruct = (Type->flags & asOBJ_VALUE) != 0;
@@ -1268,6 +1274,11 @@ void FAngelscriptPrecompiledClass::ProcessFunctions(FAngelscriptPrecompiledData&
 		check(Property->byteOffset + PropSize <= Type->size);
 	}
 #endif
+}
+
+void FAngelscriptPrecompiledClass::ResetRuntimeState() const
+{
+	bFunctionsPreProcessed = false;
 }
 
 void FAngelscriptPrecompiledEnum::InitFrom(FAngelscriptPrecompiledData& Context, asCModule* Module, asCEnumType* Type)
@@ -1536,6 +1547,9 @@ void FAngelscriptPrecompiledData::ProcessProperties(asITypeInfo* TypeInfo)
 void FAngelscriptPrecompiledModule::ApplyToModule_Stage1(FAngelscriptPrecompiledData& Context, asIScriptModule* InModule) const
 {
 	asCModule* Module = (asCModule*)InModule;
+	// This descriptor is serialized archive data, but its mutable arrays below
+	// store objects created for the last live module application.
+	ResetRuntimeState();
 
 	Context.Engine->deferValidationOfTemplateTypes = true;
 	Context.Engine->deferCalculatingTemplateSize = true;
@@ -1632,6 +1646,18 @@ void FAngelscriptPrecompiledModule::ApplyToModule_Stage3(FAngelscriptPrecompiled
 
 	// Trigger steps normally performed by a call to Build()
 	Module->JITCompile();
+}
+
+void FAngelscriptPrecompiledModule::ResetRuntimeState() const
+{
+	ClassTypes.Reset();
+	GlobalProperties.Reset();
+	GlobalFunctions.Reset();
+
+	for (const FAngelscriptPrecompiledClass& Class : Classes)
+	{
+		Class.ResetRuntimeState();
+	}
 }
 
 asSNameSpace* FAngelscriptPrecompiledData::GetNamespace(const FStringInArchive& Namespace)
@@ -2191,7 +2217,20 @@ FAngelscriptPrecompiledReference FAngelscriptPrecompiledData::ReferenceGlobalVar
 		return FAngelscriptPrecompiledReference{ 0 };
 
 	int64 Pointer = (int64)(SIZE_T)GlobalPtr;
-	if (!GlobalReferences.Contains(Pointer))
+	if (FAngelscriptGlobalReference* ExistingReference = GlobalReferences.Find(Pointer))
+	{
+		// StaticJIT generation can ask for the same global more than once while
+		// emitting one file. The existing-reference path must still return the
+		// saved symbolic name; otherwise callers fall back to address-shaped
+		// GREF_<hex> identifiers and generated AOT text becomes process-local.
+		if (OutName != nullptr)
+		{
+			*OutName = ExistingReference->Name.UnrealString();
+		}
+
+		return FAngelscriptPrecompiledReference{ Pointer };
+	}
+
 	{
 		FAngelscriptGlobalReference Ref;
 
@@ -2380,19 +2419,20 @@ void FAngelscriptPrecompiledData::PrepareToFinalizePrecompiledModules()
 		return;
 
 	FJITDatabase& Database = FJITDatabase::Get();
-	for (void** FuncPtr : Database.FunctionLookups)
+	// JIT refs keep the archive reference separate from the resolved pointer so
+	// finalization can refresh runtime addresses without losing the stable key.
+	for (FJitRef_Function* JitRef : Database.FunctionLookups)
 	{
-		*FuncPtr = GetFunction(
-			FAngelscriptPrecompiledReference{ (int64)*FuncPtr },
+		JitRef->Pointer = GetFunction(
+			FAngelscriptPrecompiledReference{ (int64)JitRef->Reference },
 			false
 		);
 	}
 
-	for (void* SysPtr : Database.SystemFunctionPointerLookups)
+	for (FJitRef_SystemFunctionPointer* JitRef : Database.SystemFunctionPointerLookups)
 	{
-		auto* JitRef = (FJitRef_SystemFunctionPointer*)SysPtr;
 		asCScriptFunction* Function = GetFunction(
-			FAngelscriptPrecompiledReference{ (int64)JitRef->Pointer },
+			FAngelscriptPrecompiledReference{ (int64)JitRef->Reference },
 			false
 		);
 
@@ -2411,18 +2451,18 @@ void FAngelscriptPrecompiledData::PrepareToFinalizePrecompiledModules()
 		}
 	}
 
-	for (void** TypePtr : Database.TypeInfoLookups)
+	for (FJitRef_Type* JitRef : Database.TypeInfoLookups)
 	{
-		*TypePtr = GetTypeInfo(
-			FAngelscriptPrecompiledReference{ (int64)*TypePtr },
+		JitRef->Pointer = GetTypeInfo(
+			FAngelscriptPrecompiledReference{ (int64)JitRef->Reference },
 			false
 		);
 	}
 
-	for (void** GlobalPtr : Database.GlobalVarLookups)
+	for (FJitRef_GlobalVar* JitRef : Database.GlobalVarLookups)
 	{
-		*GlobalPtr = GetGlobalVariable(
-			FAngelscriptPrecompiledReference{ (int64)*GlobalPtr },
+		JitRef->Pointer = GetGlobalVariable(
+			FAngelscriptPrecompiledReference{ (int64)JitRef->Reference },
 			nullptr
 		);
 	}
@@ -2688,6 +2728,34 @@ void FAngelscriptPrecompiledData::Load(const FString& Filename)
 	Reader.SetWantBinaryPropertySerialization(true);
 
 	Reader << *this;
+	// Loaded archives contain old function/type/global references, but any
+	// resolved pointers cached during a previous load belong to that previous
+	// engine/module lifetime. Clear transient lookup state so repeated loads
+	// re-resolve against the current engine during finalization.
+	ResetRuntimeState();
+}
+
+void FAngelscriptPrecompiledData::ResetRuntimeState()
+{
+	CachedPointerReferences.Reset();
+	CachedPointerReferences.Reserve(32000);
+
+	ProcessedFunctionToId.Reset();
+	ProcessedFunctionToId.Reserve(16000);
+	ProcessedIdToFunction.Reset();
+
+	ClassesLoadedFromPrecompiledData.Reset();
+	ModuleDesc.Reset();
+	ClassDesc.Reset();
+	PropertyDesc.Reset();
+	FunctionDesc.Reset();
+	ScriptSectionIdx = -1;
+	ScriptRelativeFilename = nullptr;
+
+	for (TPair<FString, FAngelscriptPrecompiledModule>& ModulePair : Modules)
+	{
+		ModulePair.Value.ResetRuntimeState();
+	}
 }
 
 uint32 FAngelscriptPrecompiledData::CreateFunctionId(asIScriptFunction* Function)

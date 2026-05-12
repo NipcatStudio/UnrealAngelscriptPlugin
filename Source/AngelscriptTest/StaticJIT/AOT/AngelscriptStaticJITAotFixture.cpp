@@ -28,7 +28,7 @@ namespace AngelscriptStaticJITAotFixture
 
 	const FString& GetSourceFilename()
 	{
-		static const FString SourceFilename(TEXT("StaticJIT/AOT/Fixtures/StaticJITAotFixture.as"));
+		static const FString SourceFilename(TEXT("ASStaticJITAotFixture.as"));
 		return SourceFilename;
 	}
 
@@ -43,14 +43,91 @@ namespace AngelscriptStaticJITAotFixture
 			TEXT("int Entry()\n")
 			TEXT("{\n")
 			TEXT("\treturn AddForAOT(35);\n")
+			TEXT("}\n")
+			TEXT("\n")
+			TEXT("UCLASS()\n")
+			TEXT("class UStaticJITAotFunctionCarrier : UObject\n")
+			TEXT("{\n")
+			TEXT("\tUPROPERTY()\n")
+			TEXT("\tint StoredValue = 0;\n")
+			TEXT("\n")
+			TEXT("\tUFUNCTION()\n")
+			TEXT("\tvoid StorePrimitiveArg(int Value)\n")
+			TEXT("\t{\n")
+			TEXT("\t\tStoredValue = Value + 3;\n")
+			TEXT("\t}\n")
+			TEXT("\n")
+			TEXT("\tUFUNCTION()\n")
+			TEXT("\tint ReturnPrimitive()\n")
+			TEXT("\t{\n")
+			TEXT("\t\treturn 61;\n")
+			TEXT("\t}\n")
+			TEXT("\n")
+			TEXT("\tUFUNCTION()\n")
+			TEXT("\tint BumpReference(int& Value)\n")
+			TEXT("\t{\n")
+			TEXT("\t\tValue += 5;\n")
+			TEXT("\t\tStoredValue = Value;\n")
+			TEXT("\t\treturn Value;\n")
+			TEXT("\t}\n")
+			TEXT("\n")
+			TEXT("\tUFUNCTION()\n")
+			TEXT("\tUObject ReturnSelfObject()\n")
+			TEXT("\t{\n")
+			TEXT("\t\treturn this;\n")
+			TEXT("\t}\n")
+			TEXT("}\n")
+			TEXT("\n")
+			TEXT("UFUNCTION(BlueprintCallable, meta = (WorldContext = \"WorldContextObject\"))\n")
+			TEXT("int StaticWorldContextCheck(UObject WorldContextObject, int Value)\n")
+			TEXT("{\n")
+			TEXT("\tif (__WorldContext() != WorldContextObject)\n")
+			TEXT("\t\treturn -1;\n")
+			TEXT("\treturn Value + 2;\n")
 			TEXT("}\n");
 		return ScriptSource;
+	}
+
+	const FName& GetGeneratedClassName()
+	{
+		static const FName ClassName(TEXT("UStaticJITAotFunctionCarrier"));
+		return ClassName;
 	}
 
 	const FString& GetEntryDeclaration()
 	{
 		static const FString EntryDeclaration(TEXT("int Entry()"));
 		return EntryDeclaration;
+	}
+
+	const FString& GetMethodPrimitiveArgDeclaration()
+	{
+		static const FString Declaration(TEXT("void StorePrimitiveArg(int)"));
+		return Declaration;
+	}
+
+	const FString& GetMethodPrimitiveReturnDeclaration()
+	{
+		static const FString Declaration(TEXT("int ReturnPrimitive()"));
+		return Declaration;
+	}
+
+	const FString& GetMethodReferenceDeclaration()
+	{
+		static const FString Declaration(TEXT("int BumpReference(int&inout)"));
+		return Declaration;
+	}
+
+	const FString& GetMethodObjectReturnDeclaration()
+	{
+		static const FString Declaration(TEXT("UObject@ ReturnSelfObject()"));
+		return Declaration;
+	}
+
+	const FString& GetStaticWorldContextDeclaration()
+	{
+		static const FString Declaration(TEXT("int StaticWorldContextCheck(UObject, int)"));
+		return Declaration;
 	}
 
 	const FGuid& GetPrecompiledDataGuid()
@@ -62,6 +139,26 @@ namespace AngelscriptStaticJITAotFixture
 	int32 GetExpectedEntryResult()
 	{
 		return 42;
+	}
+
+	int32 GetExpectedPrimitiveArgStoredValue()
+	{
+		return 44;
+	}
+
+	int32 GetExpectedPrimitiveReturnValue()
+	{
+		return 61;
+	}
+
+	int32 GetExpectedReferenceReturnValue()
+	{
+		return 18;
+	}
+
+	int32 GetExpectedStaticWorldContextResult()
+	{
+		return 33;
 	}
 
 	FString GetGeneratedDirectory()
