@@ -1,11 +1,19 @@
 #include "Shared/AngelscriptTestUtilities.h"
 #include "Shared/AngelscriptTestMacros.h"
 #include "Shared/AngelscriptTestLegacyHelpers.h"
+#include "Shared/AngelscriptFunctionalTestUtils.h"
+#include "Shared/AngelscriptReflectiveAccess.h"
+
+#include "Misc/ScopeExit.h"
+#include "UObject/UObjectGlobals.h"
+#include "UObject/UnrealType.h"
 
 // Test Layer: Runtime Integration
 #if WITH_DEV_AUTOMATION_TESTS
 
 using namespace AngelscriptTestSupport;
+using namespace AngelscriptFunctionalTestUtils;
+using namespace AngelscriptReflectiveAccess;
 
 namespace AngelscriptTestSupport
 {
@@ -94,6 +102,72 @@ bool FAngelscriptObjectBasicTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Objects.Basic currently verifies compile and symbol registration only because executing script-object methods still faults at runtime on this branch"), true);
 	}
 
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAngelscriptObjectReflectedDefaultsAndFunctionTest,
+	"Angelscript.TestModule.Functional.Objects.ReflectedDefaultsAndFunction",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAngelscriptObjectReflectedDefaultsAndFunctionTest::RunTest(const FString& Parameters)
+{
+	FAngelscriptEngine& Engine = ASTEST_CREATE_ENGINE();
+	FAngelscriptEngineScope Scope(Engine);
+	static const FName ModuleName(TEXT("ASObjectReflectedDefaultsAndFunction"));
+	ON_SCOPE_EXIT
+	{
+		Engine.DiscardModule(*ModuleName.ToString());
+		ASTEST_RESET_ENGINE(Engine);
+	};
+
+	UClass* ScriptClass = CompileScriptModule(
+		*this,
+		Engine,
+		ModuleName,
+		TEXT("ASObjectReflectedDefaultsAndFunction.as"),
+		TEXT(R"AS(
+UCLASS()
+class UObjectReflectedDefaultsAndFunction : UObject
+{
+	UPROPERTY()
+	int Counter = 9;
+
+	UPROPERTY()
+	FString ObjectLabel = "FunctionalObject";
+
+	UFUNCTION()
+	int ComputeMarker()
+	{
+		return Counter + 5;
+	}
+}
+)AS"),
+		TEXT("UObjectReflectedDefaultsAndFunction"));
+	if (ScriptClass == nullptr)
+	{
+		return false;
+	}
+
+	UObject* Object = NewObject<UObject>(GetTransientPackage(), ScriptClass);
+	if (!TestNotNull(TEXT("Script UObject should instantiate"), Object))
+	{
+		return false;
+	}
+
+	VerifyByPath<FIntProperty, int32>(*this, Object, TEXT("Counter"), 9,
+		TEXT("Script UObject should preserve reflected int defaults"));
+	VerifyByPath<FStrProperty, FString>(*this, Object, TEXT("ObjectLabel"), FString(TEXT("FunctionalObject")),
+		TEXT("Script UObject should preserve reflected string defaults"));
+
+	FFunctionInvoker Invoker(*this, Object, FName(TEXT("ComputeMarker")));
+	if (!Invoker.IsValid())
+	{
+		return false;
+	}
+
+	TestEqual(TEXT("Script UObject helper UFUNCTION should read reflected state"),
+		Invoker.CallAndReturn<int32>(INDEX_NONE), 14);
 	return true;
 }
 

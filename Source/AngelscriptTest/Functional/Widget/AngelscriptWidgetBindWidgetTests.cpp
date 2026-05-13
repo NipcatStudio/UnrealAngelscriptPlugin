@@ -44,6 +44,24 @@ class UFunctionalScoreWidget : UUserWidget
 
 	UPROPERTY(BindWidget)
 	UButton RestartButton;
+
+	UPROPERTY()
+	bool bConstructCalled = false;
+
+	UPROPERTY()
+	float LastTickDelta = 0.0f;
+
+	UFUNCTION(BlueprintOverride)
+	void Construct()
+	{
+		bConstructCalled = true;
+	}
+
+	UFUNCTION(BlueprintOverride)
+	void Tick(FGeometry MyGeometry, float DeltaTime)
+	{
+		LastTickDelta = DeltaTime;
+	}
 }
 )AS"),
 			TEXT("UFunctionalScoreWidget"));
@@ -87,6 +105,27 @@ class UFunctionalScoreWidget : UUserWidget
 			TestRunner->TestTrue(
 				TEXT("RestartButton should carry BindWidget metadata"),
 				RestartButtonProp->HasMetaData(TEXT("BindWidget")));
+		}
+
+		UFunction* ConstructFunction = WidgetClass->FindFunctionByName(TEXT("Construct"));
+		UFunction* TickFunction = WidgetClass->FindFunctionByName(TEXT("Tick"));
+		TestRunner->TestNotNull(TEXT("UserWidget Construct override should generate a UFunction"), ConstructFunction);
+		if (TestRunner->TestNotNull(TEXT("UserWidget Tick override should generate a UFunction"), TickFunction))
+		{
+			bool bHasGeometryParam = false;
+			bool bHasDeltaParam = false;
+			for (TFieldIterator<FProperty> ParamIt(TickFunction); ParamIt && ParamIt->HasAnyPropertyFlags(CPF_Parm); ++ParamIt)
+			{
+				FProperty* Param = *ParamIt;
+				if (FStructProperty* StructParam = CastField<FStructProperty>(Param))
+				{
+					bHasGeometryParam |= StructParam->Struct != nullptr
+						&& StructParam->Struct->GetStructCPPName() == TEXT("FGeometry");
+				}
+				bHasDeltaParam |= Param->IsA<FFloatProperty>() || Param->IsA<FDoubleProperty>();
+			}
+			TestRunner->TestTrue(TEXT("Tick should expose FGeometry parameter"), bHasGeometryParam);
+			TestRunner->TestTrue(TEXT("Tick should expose float/double DeltaTime parameter"), bHasDeltaParam);
 		}
 	}
 };

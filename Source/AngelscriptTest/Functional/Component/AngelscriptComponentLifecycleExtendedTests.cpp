@@ -5,6 +5,7 @@
 #include "Shared/AngelscriptTestWorld.h"
 
 #include "Core/AngelscriptComponent.h"
+#include "Components/BillboardComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "GameFramework/Actor.h"
@@ -364,6 +365,65 @@ class ATestDefaultComponentExtendedProperties : AActor
 		TestRunner->TestEqual(TEXT("Child DefaultComponent should use native default-subobject creation method"), Child->CreationMethod, EComponentCreationMethod::Native);
 		TestRunner->TestEqual(TEXT("Root component property should have the scripted component name"), Root->GetFName(), FName(TEXT("Root")));
 		TestRunner->TestEqual(TEXT("Child component property should have the scripted component name"), Child->GetFName(), FName(TEXT("Child")));
+	}
+
+	TEST_METHOD(ScriptedRootAndAttachedBillboardMaterialize)
+	{
+		using namespace AngelscriptTest_Component_LifecycleExtended_Private;
+
+		FAngelscriptEngine& Engine = ASTEST_GET_ENGINE();
+		FAngelscriptEngineScope Scope(Engine);
+		static const FName ModuleName(TEXT("TestDefaultComponentCoverageHierarchy"));
+		ON_SCOPE_EXIT { Engine.DiscardModule(*ModuleName.ToString()); };
+
+		UClass* ActorClass = CompileScriptModule(*TestRunner, Engine, ModuleName,
+			TEXT("TestDefaultComponentCoverageHierarchy.as"),
+			TEXT(R"AS(
+UCLASS()
+class UTestCoverageRootComponent : USceneComponent
+{
+}
+
+UCLASS()
+class UTestCoverageBillboardComponent : UBillboardComponent
+{
+}
+
+UCLASS()
+class ATestDefaultComponentCoverageHierarchy : AActor
+{
+	UPROPERTY(DefaultComponent, RootComponent)
+	UTestCoverageRootComponent ScriptedRoot;
+
+	UPROPERTY(DefaultComponent, Attach = ScriptedRoot)
+	UTestCoverageBillboardComponent AttachedBillboard;
+}
+)AS"),
+			TEXT("ATestDefaultComponentCoverageHierarchy"));
+		if (ActorClass == nullptr) return;
+
+		FAngelscriptTestWorld W(*TestRunner, Engine);
+		if (!W.IsValid()) return;
+		AActor* Actor = W.SpawnActorOfClass(ActorClass);
+		if (!TestRunner->TestNotNull(TEXT("Actor should spawn"), Actor)) return;
+
+		USceneComponent* ScriptedRoot = ReadComponentProperty<USceneComponent>(*TestRunner, Actor, TEXT("ScriptedRoot"));
+		UBillboardComponent* AttachedBillboard = ReadComponentProperty<UBillboardComponent>(*TestRunner, Actor, TEXT("AttachedBillboard"));
+		if (ScriptedRoot == nullptr || AttachedBillboard == nullptr) return;
+
+		UClass* RootClass = FindGeneratedClass(&Engine, TEXT("UTestCoverageRootComponent"));
+		UClass* BillboardClass = FindGeneratedClass(&Engine, TEXT("UTestCoverageBillboardComponent"));
+		if (!TestRunner->TestNotNull(TEXT("Scripted root component class should be generated"), RootClass)
+			|| !TestRunner->TestNotNull(TEXT("Scripted billboard component class should be generated"), BillboardClass))
+		{
+			return;
+		}
+
+		TestRunner->TestEqual(TEXT("Scripted root property should point at the actor root"), ScriptedRoot, Actor->GetRootComponent());
+		TestRunner->TestTrue(TEXT("Scripted root should use the generated component class"), ScriptedRoot->IsA(RootClass));
+		TestRunner->TestTrue(TEXT("Attached billboard should use the generated billboard class"), AttachedBillboard->IsA(BillboardClass));
+		TestRunner->TestEqual(TEXT("Attached billboard should preserve the scripted attach hierarchy"),
+			AttachedBillboard->GetAttachParent(), ScriptedRoot);
 	}
 
 	TEST_METHOD(AttachSocketPersistsAtRuntime)

@@ -2,6 +2,7 @@
 #include "Shared/AngelscriptTestMacros.h"
 #include "Functional/Actor/AngelscriptActorTestHelpers.h"
 
+#include "Components/SphereComponent.h"
 #include "Kismet/GameplayStatics.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -455,6 +456,99 @@ class ATestEndOverlapTrigger : AActor
 			if (!GetObjectByPath(*TestRunner, Receiver, TEXT("LastActorRef"), OtherActor)) return;
 			TestRunner->TestEqual(TEXT("ActorEndOverlap should pass the departing actor"),
 				OtherActor, static_cast<UObject*>(Trigger));
+		}
+	}
+
+	TEST_METHOD(ComponentBeginOverlapAddUFunction)
+	{
+		FAngelscriptEngine& Engine = ASTEST_GET_ENGINE();
+		FAngelscriptEngineScope Scope(Engine);
+		static const FName ModuleName(TEXT("TestComponentBeginOverlapAddUFunction"));
+		ON_SCOPE_EXIT { Engine.DiscardModule(*ModuleName.ToString()); };
+
+		UClass* ReceiverClass = CompileScriptModule(*TestRunner, Engine, ModuleName,
+			TEXT("TestComponentBeginOverlapAddUFunction.as"),
+			TEXT(R"AS(
+UCLASS()
+class UTestComponentBeginOverlapReceiver : USphereComponent
+{
+	UPROPERTY()
+	int BeginOverlapCount = 0;
+
+	UPROPERTY()
+	AActor LastOtherActor = nullptr;
+
+	UFUNCTION(BlueprintOverride)
+	void BeginPlay()
+	{
+		OnComponentBeginOverlap.AddUFunction(this, n"HandleComponentBeginOverlap");
+	}
+
+	UFUNCTION()
+	void HandleComponentBeginOverlap(
+		UPrimitiveComponent OverlappedComponent,
+		AActor OtherActor,
+		UPrimitiveComponent OtherComponent,
+		int OtherBodyIndex,
+		bool bFromSweep,
+		const FHitResult&in Hit)
+	{
+		LastOtherActor = OtherActor;
+		BeginOverlapCount += 1;
+	}
+}
+
+UCLASS()
+class ATestComponentBeginOverlapOwner : AActor
+{
+	UPROPERTY(DefaultComponent, RootComponent)
+	UTestComponentBeginOverlapReceiver Trigger;
+}
+
+UCLASS()
+class ATestComponentBeginOverlapOther : AActor
+{
+	UPROPERTY(DefaultComponent, RootComponent)
+	USphereComponent Trigger;
+}
+)AS"),
+			TEXT("ATestComponentBeginOverlapOwner"));
+		if (ReceiverClass == nullptr) return;
+
+		UClass* OtherClass = FindGeneratedClass(&Engine, TEXT("ATestComponentBeginOverlapOther"));
+		if (!TestRunner->TestNotNull(TEXT("Other overlap class should be generated"), OtherClass)) return;
+
+		FAngelscriptTestWorld W(*TestRunner, Engine);
+		if (!W.IsValid()) return;
+		AActor* ReceiverActor = W.SpawnActorOfClass(ReceiverClass);
+		AActor* OtherActor = W.SpawnActorOfClass(OtherClass);
+		if (!TestRunner->TestNotNull(TEXT("Receiver actor should spawn"), ReceiverActor)
+			|| !TestRunner->TestNotNull(TEXT("Other actor should spawn"), OtherActor))
+		{
+			return;
+		}
+
+		UPrimitiveComponent* ReceiverComponent = Cast<UPrimitiveComponent>(ReceiverActor->GetRootComponent());
+		UPrimitiveComponent* OtherComponent = Cast<UPrimitiveComponent>(OtherActor->GetRootComponent());
+		if (!TestRunner->TestNotNull(TEXT("Receiver root should be a primitive component"), ReceiverComponent)
+			|| !TestRunner->TestNotNull(TEXT("Other root should be a primitive component"), OtherComponent))
+		{
+			return;
+		}
+
+		W.BeginPlay(*ReceiverActor);
+		W.BeginPlay(*OtherActor);
+
+		FHitResult Hit;
+		ReceiverComponent->OnComponentBeginOverlap.Broadcast(ReceiverComponent, OtherActor, OtherComponent, 0, false, Hit);
+
+		VerifyByPath<FIntProperty, int32>(*TestRunner, ReceiverComponent, TEXT("BeginOverlapCount"), 1,
+			TEXT("Component begin overlap delegate should invoke the AddUFunction script handler"));
+		{
+			UObject* LastOtherActor = nullptr;
+			if (!GetObjectByPath(*TestRunner, ReceiverComponent, TEXT("LastOtherActor"), LastOtherActor)) return;
+			TestRunner->TestEqual(TEXT("Component begin overlap handler should receive the other actor"),
+				LastOtherActor, static_cast<UObject*>(OtherActor));
 		}
 	}
 

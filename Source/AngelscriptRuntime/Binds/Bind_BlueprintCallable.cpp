@@ -13,6 +13,121 @@
 
 extern void RegisterBlueprintEventByScriptName(UClass* Class, const FString& ScriptName, UFunction* Function);
 
+namespace
+{
+	bool IsScriptMethodReadOnly(const FString& Declaration)
+	{
+		return Declaration.Contains(TEXT(") const"));
+	}
+
+	bool DoesFunctionMatchSignatureShape(asIScriptFunction* ExistingFunction, const FAngelscriptFunctionSignature& Signature)
+	{
+		if (ExistingFunction == nullptr)
+		{
+			return false;
+		}
+
+		const FTCHARToUTF8 ScriptNameUtf8(*Signature.ScriptName);
+		const char* ExistingName = ExistingFunction->GetName();
+		if (FCStringAnsi::Strcmp(ExistingName != nullptr ? ExistingName : "", ScriptNameUtf8.Get()) != 0)
+		{
+			return false;
+		}
+
+		if (!Signature.bStaticInScript && ExistingFunction->IsReadOnly() != IsScriptMethodReadOnly(Signature.Declaration))
+		{
+			return false;
+		}
+
+		if (ExistingFunction->GetParamCount() != static_cast<asUINT>(Signature.ArgumentTypes.Num()))
+		{
+			return false;
+		}
+
+		for (int32 ArgumentIndex = 0, ArgumentCount = Signature.ArgumentTypes.Num(); ArgumentIndex < ArgumentCount; ++ArgumentIndex)
+		{
+			FAngelscriptTypeUsage ExistingArgument = FAngelscriptTypeUsage::FromParam(ExistingFunction, ArgumentIndex);
+			if (!ExistingArgument.IsValid() || !ExistingArgument.EqualsUnqualified(Signature.ArgumentTypes[ArgumentIndex]))
+			{
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	bool DoesGlobalFunctionMatchNamespace(asIScriptFunction* ExistingFunction, const FString& Namespace)
+	{
+		if (ExistingFunction == nullptr)
+		{
+			return false;
+		}
+
+		const char* ExistingNamespace = ExistingFunction->GetNamespace();
+		if (Namespace.IsEmpty())
+		{
+			return ExistingNamespace == nullptr || ExistingNamespace[0] == '\0';
+		}
+
+		const FTCHARToUTF8 NamespaceUtf8(*Namespace);
+		return FCStringAnsi::Strcmp(ExistingNamespace != nullptr ? ExistingNamespace : "", NamespaceUtf8.Get()) == 0;
+	}
+
+	bool IsEquivalentScriptSignatureAlreadyBound(TSharedRef<FAngelscriptType> InType, const FAngelscriptFunctionSignature& Signature)
+	{
+		if (!Signature.bAllTypesValid || Signature.ScriptName.IsEmpty() || Signature.ScriptName == TEXT("-"))
+		{
+			return false;
+		}
+
+		asIScriptEngine* ScriptEngine = FAngelscriptEngine::Get().GetScriptEngine();
+		if (ScriptEngine == nullptr)
+		{
+			return false;
+		}
+
+		if (Signature.bStaticInScript)
+		{
+			auto HasMatchingGlobalFunction = [&](const FString& Namespace) -> bool
+			{
+				for (asUINT FunctionIndex = 0, FunctionCount = ScriptEngine->GetGlobalFunctionCount(); FunctionIndex < FunctionCount; ++FunctionIndex)
+				{
+					asIScriptFunction* ExistingFunction = ScriptEngine->GetGlobalFunctionByIndex(FunctionIndex);
+					if (DoesGlobalFunctionMatchNamespace(ExistingFunction, Namespace)
+						&& DoesFunctionMatchSignatureShape(ExistingFunction, Signature))
+					{
+						return true;
+					}
+				}
+
+				return false;
+			};
+
+			return HasMatchingGlobalFunction(Signature.ClassName)
+				|| (Signature.bGlobalScope && HasMatchingGlobalFunction(FString()));
+		}
+
+		const FString& ScriptTypeName = Signature.bStaticInUnreal ? Signature.ClassName : InType->GetAngelscriptTypeName();
+		const FTCHARToUTF8 ScriptTypeNameUtf8(*ScriptTypeName);
+		asITypeInfo* TypeInfo = ScriptEngine->GetTypeInfoByName(ScriptTypeNameUtf8.Get());
+		if (TypeInfo == nullptr)
+		{
+			return false;
+		}
+
+		for (asUINT MethodIndex = 0, MethodCount = TypeInfo->GetMethodCount(); MethodIndex < MethodCount; ++MethodIndex)
+		{
+			asIScriptFunction* ExistingMethod = TypeInfo->GetMethodByIndex(MethodIndex);
+			if (DoesFunctionMatchSignatureShape(ExistingMethod, Signature))
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+}
+
 // Bind a native function to angelscript, provided all
 // argument and return types are known as FAngelscriptTypes.
 void BindBlueprintCallable(
@@ -60,16 +175,6 @@ void BindBlueprintCallable(
 		return;
 #endif
 
-	if (ShouldBindBlueprintCallableReflectionFallback(Function))
-	{
-		Entry->bReflectiveFallbackBound = false;
-
-#if !AS_USE_BIND_DB
-		Signature.WriteToDB(DBBind);
-#endif
-		return;
-	}
-
 	auto* DirectNativePointer = &Entry->FuncPtr;
 	const bool bHasDirectNativePointer = DirectNativePointer != nullptr && DirectNativePointer->IsBound();
 	if (!bHasDirectNativePointer)
@@ -92,6 +197,10 @@ void BindBlueprintCallable(
 	}
 
 	Entry->bReflectiveFallbackBound = false;
+	if (IsEquivalentScriptSignatureAlreadyBound(InType, Signature))
+	{
+		return;
+	}
 
 	// FGenericFuncPtr is a copy of asSFuncPtr, so do a direct memcpy
 	asSFuncPtr ASFuncPtr;
@@ -229,13 +338,6 @@ void BindBlueprintCallable_FromPrep(
 		return;
 	}
 
-	if (ShouldBindBlueprintCallableReflectionFallback(Function))
-	{
-		Entry->bReflectiveFallbackBound = false;
-		Signature.WriteToDB(DBBind);
-		return;
-	}
-
 	auto* DirectNativePointer = &Entry->FuncPtr;
 	const bool bHasDirectNativePointer = DirectNativePointer != nullptr && DirectNativePointer->IsBound();
 	if (!bHasDirectNativePointer)
@@ -254,6 +356,10 @@ void BindBlueprintCallable_FromPrep(
 	}
 
 	Entry->bReflectiveFallbackBound = false;
+	if (IsEquivalentScriptSignatureAlreadyBound(InType, Signature))
+	{
+		return;
+	}
 
 	asSFuncPtr ASFuncPtr;
 	static_assert(sizeof(asSFuncPtr) == sizeof(FGenericFuncPtr), "FGenericFuncPtr must be the same struct as asSFuncPtr");

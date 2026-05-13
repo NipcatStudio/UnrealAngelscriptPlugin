@@ -7,8 +7,8 @@
 // All UFunctions are tagged BlueprintCallable so they enter the reflective binding path
 // (Bind_BlueprintType.cpp:1428-1437); the historical bare UFUNCTION() forms were dead code
 // (no manual Bind_*.cpp wiring + no BlueprintCallable/ScriptCallable flag => never bound).
-// 21 redundant wrappers around UE-native FRotator/FVector/FTransform AActor APIs were removed;
-// 9 fork-distinctive surfaces remain: 6 FQuat overloads + SetActorLocationAdvanced (sweep+hit)
+// 22 redundant wrappers around UE-native FRotator/FVector/FTransform AActor APIs were removed;
+// 8 fork-distinctive surfaces remain: 6 FQuat overloads
 // + 2 editor-only construction-script utilities. Hazelight upstream parity holds via ScriptName
 // aliases on the FQuat overloads.
 
@@ -55,7 +55,7 @@ public:
 		Actor->AddActorWorldRotation(DeltaRotation);
 	}
 
-	UFUNCTION(BlueprintCallable, Meta = (ScriptName = "SetActorLocation", NotAngelscriptProperty))
+	UFUNCTION(BlueprintCallable, Meta = (ScriptName = "SetActorLocation", NotAngelscriptProperty, NotInAngelscript = "true"))
 	static bool SetActorLocationAdvanced(AActor* Actor, const FVector& NewLocation, bool bSweep, FHitResult& SweepHitResult, bool bTeleport = false)
 	{
 		return Actor->K2_SetActorLocation(NewLocation, bSweep, SweepHitResult, bTeleport);

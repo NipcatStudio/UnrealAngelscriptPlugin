@@ -62,6 +62,73 @@ class ATestActorBeginPlay : AActor
 			TEXT("BeginPlay should run exactly once when the script actor is spawned"));
 	}
 
+	TEST_METHOD(DefaultsAndHelperFunction)
+	{
+		FAngelscriptEngine& Engine = ASTEST_GET_ENGINE();
+		FAngelscriptEngineScope Scope(Engine);
+		static const FName ModuleName(TEXT("TestActorDefaultsAndHelperFunction"));
+		ON_SCOPE_EXIT { Engine.DiscardModule(*ModuleName.ToString()); };
+
+		UClass* ScriptClass = CompileScriptModule(*TestRunner, Engine, ModuleName,
+			TEXT("TestActorDefaultsAndHelperFunction.as"),
+			TEXT(R"AS(
+UCLASS()
+class ATestActorDefaultsAndHelperFunction : AActor
+{
+	UPROPERTY()
+	int Health = 125;
+
+	UPROPERTY()
+	FString DisplayName = "FunctionalActor";
+
+	UPROPERTY()
+	bool bBeginPlayTriggered = false;
+
+	default bReplicates = true;
+	default Tags.Add(n"FunctionalActor");
+	default PrimaryActorTick.TickInterval = 0.25;
+
+	UFUNCTION(BlueprintOverride)
+	void BeginPlay()
+	{
+		bBeginPlayTriggered = true;
+	}
+
+	UFUNCTION()
+	int GetHealthValue()
+	{
+		return Health;
+	}
+}
+)AS"),
+			TEXT("ATestActorDefaultsAndHelperFunction"));
+		if (ScriptClass == nullptr) return;
+
+		FAngelscriptTestWorld W(*TestRunner, Engine);
+		if (!W.IsValid()) return;
+		AActor* Actor = W.SpawnActorOfClass(ScriptClass);
+		if (!TestRunner->TestNotNull(TEXT("Actor should spawn"), Actor)) return;
+
+		TestRunner->TestTrue(TEXT("Script default should enable replication"), Actor->GetIsReplicated());
+		TestRunner->TestTrue(TEXT("Script default should add the expected actor tag"), Actor->ActorHasTag(TEXT("FunctionalActor")));
+		TestRunner->TestTrue(TEXT("Script default should apply the configured tick interval"),
+			FMath::IsNearlyEqual(Actor->PrimaryActorTick.TickInterval, 0.25f));
+
+		W.BeginPlay(*Actor);
+
+		VerifyByPath<FIntProperty, int32>(*TestRunner, Actor, TEXT("Health"), 125,
+			TEXT("Actor default should preserve reflected int value"));
+		VerifyByPath<FStrProperty, FString>(*TestRunner, Actor, TEXT("DisplayName"), FString(TEXT("FunctionalActor")),
+			TEXT("Actor default should preserve reflected string value"));
+		VerifyByPath<FBoolProperty, bool>(*TestRunner, Actor, TEXT("bBeginPlayTriggered"), true,
+			TEXT("BeginPlay should set the reflected marker"));
+
+		FFunctionInvoker Invoker(*TestRunner, Actor, FName(TEXT("GetHealthValue")));
+		if (!Invoker.IsValid()) return;
+		TestRunner->TestEqual(TEXT("Helper UFUNCTION should return the reflected Health value"),
+			Invoker.CallAndReturn<int32>(INDEX_NONE), 125);
+	}
+
 	TEST_METHOD(BeginPlayIdempotent)
 	{
 		FAngelscriptEngine& Engine = ASTEST_GET_ENGINE();
