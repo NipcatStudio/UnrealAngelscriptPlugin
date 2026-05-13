@@ -1,5 +1,6 @@
 #include "Shared/AngelscriptFunctionalTestUtils.h"
 #include "Shared/AngelscriptTestMacros.h"
+#include "Shared/AngelscriptTestWorld.h"
 
 #include "Components/SceneComponent.h"
 #include "Components/SplineComponent.h"
@@ -17,7 +18,7 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptComponentSplineUsageTests,
 	"Angelscript.TestModule.Functional.Component.SplineUsage",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 {
-	TEST_METHOD(SplineDefaultComponentRegistersAndAPICompiles)
+	TEST_METHOD(SplineDefaultComponentRegistersAndMaterializes)
 	{
 		using namespace AngelscriptFunctionalTestUtils;
 		FAngelscriptEngine& Engine = ASTEST_CREATE_ENGINE_FULL();
@@ -42,20 +43,16 @@ class AFunctionalSplineActor : AActor
 	USplineComponent Spline;
 
 	UPROPERTY()
-	float SampledLength = 0.0;
+	int RootChildCountAtBeginPlay = 0;
 
 	UPROPERTY()
-	FVector SampledLocation = FVector::ZeroVector;
-
-	UPROPERTY()
-	FRotator SampledRotation = FRotator::ZeroRotator;
+	bool bSawSplineAtBeginPlay = false;
 
 	UFUNCTION(BlueprintOverride)
 	void BeginPlay()
 	{
-		SampledLength = Spline.GetSplineLength();
-		SampledLocation = Spline.GetLocationAtDistanceAlongSpline(0.0, ESplineCoordinateSpace::World);
-		SampledRotation = Spline.GetRotationAtDistanceAlongSpline(0.0, ESplineCoordinateSpace::World);
+		RootChildCountAtBeginPlay = Root.GetNumChildrenComponents();
+		bSawSplineAtBeginPlay = Spline != null;
 	}
 }
 )AS"),
@@ -84,15 +81,47 @@ class AFunctionalSplineActor : AActor
 				&& RootProp->PropertyClass->IsChildOf(USceneComponent::StaticClass()));
 		}
 
-		// AngelscriptSettings::bScriptFloatIsFloat64 defaults to true, so AS 'float' lowers to FDoubleProperty.
-		FDoubleProperty* SampledLengthProp = FindFProperty<FDoubleProperty>(ActorClass, TEXT("SampledLength"));
-		TestRunner->TestNotNull(TEXT("SampledLength FDoubleProperty should be registered"), SampledLengthProp);
+		FIntProperty* RootChildCountProp = FindFProperty<FIntProperty>(ActorClass, TEXT("RootChildCountAtBeginPlay"));
+		TestRunner->TestNotNull(TEXT("RootChildCountAtBeginPlay FIntProperty should be registered"), RootChildCountProp);
 
-		FStructProperty* SampledLocationProp = FindFProperty<FStructProperty>(ActorClass, TEXT("SampledLocation"));
-		TestRunner->TestNotNull(TEXT("SampledLocation FStructProperty should be registered"), SampledLocationProp);
+		FBoolProperty* SawSplineProp = FindFProperty<FBoolProperty>(ActorClass, TEXT("bSawSplineAtBeginPlay"));
+		TestRunner->TestNotNull(TEXT("bSawSplineAtBeginPlay FBoolProperty should be registered"), SawSplineProp);
 
-		FStructProperty* SampledRotationProp = FindFProperty<FStructProperty>(ActorClass, TEXT("SampledRotation"));
-		TestRunner->TestNotNull(TEXT("SampledRotation FStructProperty should be registered"), SampledRotationProp);
+		FAngelscriptTestWorld W(*TestRunner, Engine);
+		if (!W.IsValid()) { return; }
+
+		AActor* Actor = W.SpawnActorOfClass(ActorClass);
+		if (!TestRunner->TestNotNull(TEXT("Spline actor should spawn"), Actor)) { return; }
+
+		USceneComponent* Root = RootProp != nullptr
+			? Cast<USceneComponent>(RootProp->GetObjectPropertyValue_InContainer(Actor))
+			: nullptr;
+		USplineComponent* Spline = SplineProp != nullptr
+			? Cast<USplineComponent>(SplineProp->GetObjectPropertyValue_InContainer(Actor))
+			: nullptr;
+		if (!TestRunner->TestNotNull(TEXT("Root default component should materialize"), Root)
+			|| !TestRunner->TestNotNull(TEXT("Spline default component should materialize"), Spline))
+		{
+			return;
+		}
+
+		TestRunner->TestEqual(TEXT("Root property should point to the actor root component"), Root, Actor->GetRootComponent());
+		TestRunner->TestEqual(TEXT("Spline default component should attach to the scripted root"), Spline->GetAttachParent(), Root);
+		TestRunner->TestTrue(TEXT("Spline default component should register with the actor"), Spline->IsRegistered());
+		TestRunner->TestTrue(TEXT("Spline component should expose native spline state after materialization"), Spline->GetNumberOfSplinePoints() >= 0);
+
+		W.BeginPlay(*Actor);
+
+		int32 RootChildCountAtBeginPlay = 0;
+		bool bSawSplineAtBeginPlay = false;
+		if (!ReadPropertyValue<FIntProperty>(*TestRunner, Actor, TEXT("RootChildCountAtBeginPlay"), RootChildCountAtBeginPlay)
+			|| !ReadPropertyValue<FBoolProperty>(*TestRunner, Actor, TEXT("bSawSplineAtBeginPlay"), bSawSplineAtBeginPlay))
+		{
+			return;
+		}
+
+		TestRunner->TestTrue(TEXT("Script BeginPlay should see the attached spline through the root component"), RootChildCountAtBeginPlay >= 1);
+		TestRunner->TestTrue(TEXT("Script BeginPlay should see a non-null spline component reference"), bSawSplineAtBeginPlay);
 	}
 };
 

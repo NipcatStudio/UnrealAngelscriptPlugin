@@ -24,6 +24,8 @@
 
 #if WITH_EDITOR
 #include "BlueprintActionDatabase.h"
+#include "K2Node_GetSubsystem.h"
+#include "Subsystems/Subsystem.h"
 #endif
 
 struct FAngelscriptTestEngineScopeAccess
@@ -266,6 +268,7 @@ namespace AngelscriptTestSupport
 		int32 DiscardedDelegateFunctionCount = 0;
 		int32 RootedDiscardedDelegateFunctionCount = 0;
 		int32 BlueprintActionCacheClearedCount = 0;
+		int32 BlueprintSubsystemNodeActionCacheClearedCount = 0;
 	};
 
 	inline FDetachedASTypeCleanupResult CleanupDetachedASTypesForGarbageCollection(const TArray<TSharedRef<FAngelscriptModuleDesc>>* DiscardedModules = nullptr)
@@ -277,10 +280,19 @@ namespace AngelscriptTestSupport
 		// variable node spawners can point at FProperty objects owned by the generated class.
 		// Use TryGet() so reset only cleans an existing database instead of initializing one.
 		FBlueprintActionDatabase* BlueprintActionDatabase = FBlueprintActionDatabase::TryGet();
+		bool bClearSubsystemNodeActions = false;
+		auto MarkSubsystemNodeActionsDirty = [&bClearSubsystemNodeActions](UObject* Object)
+		{
+			const UClass* Class = Cast<UClass>(Object);
+			if (Class != nullptr && Class->IsChildOf(USubsystem::StaticClass()))
+			{
+				bClearSubsystemNodeActions = true;
+			}
+		};
 #endif
 		auto CleanupGeneratedObject = [&Result
 #if WITH_EDITOR
-			, BlueprintActionDatabase
+			, BlueprintActionDatabase, &MarkSubsystemNodeActionsDirty
 #endif
 		](UObject* Object, int32& ObjectCount, int32& RootedObjectCount)
 		{
@@ -291,6 +303,7 @@ namespace AngelscriptTestSupport
 
 			++ObjectCount;
 #if WITH_EDITOR
+			MarkSubsystemNodeActionsDirty(Object);
 			if (BlueprintActionDatabase != nullptr && BlueprintActionDatabase->ClearAssetActions(Object))
 			{
 				++Result.BlueprintActionCacheClearedCount;
@@ -310,6 +323,7 @@ namespace AngelscriptTestSupport
 			{
 				++Result.DetachedClassCount;
 #if WITH_EDITOR
+				MarkSubsystemNodeActionsDirty(*It);
 				// Drop cached actions before GC; otherwise Blueprint action spawners may
 				// remain external strong references to this detached generated class.
 				if (BlueprintActionDatabase != nullptr && BlueprintActionDatabase->ClearAssetActions(*It))
@@ -374,6 +388,25 @@ namespace AngelscriptTestSupport
 			}
 		}
 
+#if WITH_EDITOR
+		if (bClearSubsystemNodeActions && BlueprintActionDatabase != nullptr)
+		{
+			auto ClearNodeActions = [&Result, BlueprintActionDatabase](UClass* NodeClass)
+			{
+				if (NodeClass != nullptr && BlueprintActionDatabase->ClearAssetActions(NodeClass))
+				{
+					++Result.BlueprintActionCacheClearedCount;
+					++Result.BlueprintSubsystemNodeActionCacheClearedCount;
+				}
+			};
+
+			ClearNodeActions(UK2Node_GetSubsystem::StaticClass());
+			ClearNodeActions(UK2Node_GetSubsystemFromPC::StaticClass());
+			ClearNodeActions(UK2Node_GetEngineSubsystem::StaticClass());
+			ClearNodeActions(UK2Node_GetEditorSubsystem::StaticClass());
+		}
+#endif
+
 		return Result;
 	}
 
@@ -432,6 +465,11 @@ namespace AngelscriptTestSupport
 				DetachedTypeResult.DiscardedDelegateFunctionCount,
 				DetachedTypeResult.RootedDiscardedDelegateFunctionCount,
 				DetachedTypeResult.BlueprintActionCacheClearedCount);
+		}
+		if (DetachedTypeResult.BlueprintSubsystemNodeActionCacheClearedCount > 0)
+		{
+			UE_LOG(Angelscript, Verbose, TEXT("[TestEngine] ResetShared: cleared %d subsystem Blueprint node action entries after script subsystem cleanup"),
+				DetachedTypeResult.BlueprintSubsystemNodeActionCacheClearedCount);
 		}
 
 		CollectGarbage(RF_NoFlags, true);
