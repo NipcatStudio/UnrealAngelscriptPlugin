@@ -104,6 +104,7 @@ bool FAngelscriptBinds::ShouldSkipBlueprintCallableFunction(const UFunction* Fun
 		return true;
 	}
 
+#if WITH_METADATA
 	if (Function->HasMetaData(NAME_Function_NotInAngelscript))
 	{
 		return true;
@@ -113,6 +114,7 @@ bool FAngelscriptBinds::ShouldSkipBlueprintCallableFunction(const UFunction* Fun
 	{
 		return true;
 	}
+#endif
 
 	if (const UClass* OwningClass = Function->GetOuterUClass())
 	{

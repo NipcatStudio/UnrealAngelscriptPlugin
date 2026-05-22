@@ -969,10 +969,15 @@ FAngelscriptStateDump::FTableResult FAngelscriptStateDump::DumpEngineSettings(FA
 			continue;
 		}
 
+#if WITH_METADATA
+		const FString Category = Property->GetMetaData(TEXT("Category"));
+#else
+		const FString Category;
+#endif
 		Writer.AddRow({
 			Property->GetName(),
 			ExportPropertyValue(*Property, &Settings),
-			Property->GetMetaData(TEXT("Category"))
+			Category
 		});
 	}
 

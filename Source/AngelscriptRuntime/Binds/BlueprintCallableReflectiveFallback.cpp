@@ -948,10 +948,12 @@ EReflectionFallbackResult EvaluateReflectionFallback(const UFunction* Function)
 		return EReflectionFallbackResult::InterfaceClass;
 	}
 
+#if WITH_METADATA
 	if (Function->HasMetaData(NAME_BlueprintCallableReflectiveFallback_CustomThunk))
 	{
 		return EReflectionFallbackResult::CustomThunk;
 	}
+#endif
 
 	if (GetNonReturnParameterCount(Function) > BlueprintCallableReflectiveFallbackMaxArgs)
 	{
