@@ -1219,6 +1219,7 @@ bool FAngelscriptEngine::GetStaticJITFunctionIdForTesting(asIScriptFunction* Fun
 
 	return PrecompiledData->GetIdForFunction(Function, OutId);
 }
+#endif
 
 FAngelscriptTypeDatabase* FAngelscriptEngine::GetTypeDatabase() const
 {
@@ -1252,6 +1253,7 @@ void FAngelscriptEngine::EnsureSharedStateCreated()
 	}
 }
 
+#if WITH_DEV_AUTOMATION_TESTS
 int32 FAngelscriptEngine::GetToStringEntryCountForTesting() const
 {
 	if (TArray<FToStringType>* List = GetToStringList())
