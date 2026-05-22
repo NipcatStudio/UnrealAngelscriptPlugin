@@ -14,7 +14,8 @@ namespace AngelscriptUHTTool;
 internal sealed record AngelscriptGeneratedFunctionEntry(
 	string ClassName,
 	string FunctionName,
-	string EraseMacro)
+	string EraseMacro,
+	bool IsEditorOnly)
 {
 	public string BuildRegistrationLine()
 	{
@@ -41,7 +42,8 @@ internal sealed record AngelscriptGeneratedFunctionCsvEntry(
 	string FunctionName,
 	string EntryKind,
 	string EraseMacro,
-	int ShardIndex);
+	int ShardIndex,
+	bool FunctionIsEditorOnly);
 
 internal static class AngelscriptFunctionTableCodeGenerator
 {
@@ -132,7 +134,8 @@ internal static class AngelscriptFunctionTableCodeGenerator
 					entry.FunctionName,
 					entry.EraseMacro == "ERASE_NO_FUNCTION()" ? "Stub" : "Direct",
 					entry.EraseMacro,
-					shardIndex + 1));
+					shardIndex + 1,
+					entry.IsEditorOnly));
 			}
 		}
 
@@ -247,7 +250,7 @@ internal static class AngelscriptFunctionTableCodeGenerator
 		Directory.CreateDirectory(Path.GetDirectoryName(csvPath)!);
 
 		StringBuilder builder = new();
-		builder.AppendLine("ModuleName,EditorOnly,ClassName,FunctionName,EntryKind,EraseMacro,ShardIndex");
+		builder.AppendLine("ModuleName,EditorOnly,ClassName,FunctionName,EntryKind,EraseMacro,ShardIndex,FunctionIsEditorOnly");
 		foreach (AngelscriptGeneratedFunctionCsvEntry entry in csvEntries)
 		{
 			builder
@@ -257,7 +260,8 @@ internal static class AngelscriptFunctionTableCodeGenerator
 				.Append(EscapeCsv(entry.FunctionName)).Append(',')
 				.Append(EscapeCsv(entry.EntryKind)).Append(',')
 				.Append(EscapeCsv(entry.EraseMacro)).Append(',')
-				.Append(entry.ShardIndex)
+				.Append(entry.ShardIndex).Append(',')
+				.Append(entry.FunctionIsEditorOnly ? "true" : "false")
 				.Append("\r\n");
 		}
 
@@ -309,7 +313,20 @@ internal static class AngelscriptFunctionTableCodeGenerator
 
 		for (int entryIndex = startIndex; entryIndex < startIndex + entryCount; entryIndex++)
 		{
-			builder.AppendLine(entries[entryIndex].BuildRegistrationLine());
+			AngelscriptGeneratedFunctionEntry entry = entries[entryIndex];
+			// Skip in non-editor builds when the source UFUNCTION (or its class) lives behind
+			// WITH_EDITOR / WITH_EDITORONLY_DATA: taking its address would otherwise reference a
+			// symbol that doesn't exist in cooked builds (e.g. AActor::GetActorLabel).
+			if (entry.IsEditorOnly)
+			{
+				builder.AppendLine("#if WITH_EDITOR");
+				builder.AppendLine(entry.BuildRegistrationLine());
+				builder.AppendLine("#endif");
+			}
+			else
+			{
+				builder.AppendLine(entry.BuildRegistrationLine());
+			}
 		}
 
 		builder.AppendLine("\tconst double GeneratedFunctionTableElapsedMilliseconds = (FPlatformTime::Seconds() - GeneratedFunctionTableStartSeconds) * 1000.0;");
@@ -488,7 +505,8 @@ internal static class AngelscriptFunctionTableCodeGenerator
 						eraseMacro = "ERASE_NO_FUNCTION()";
 					}
 
-					entries.Add(new AngelscriptGeneratedFunctionEntry(classObj.SourceName, function.SourceName, eraseMacro));
+					bool entryEditorOnly = IsEntryEditorOnly(classObj, function);
+					entries.Add(new AngelscriptGeneratedFunctionEntry(classObj.SourceName, function.SourceName, eraseMacro, entryEditorOnly));
 				}
 			}
 		}
@@ -497,6 +515,29 @@ internal static class AngelscriptFunctionTableCodeGenerator
 		{
 			CollectEntries(factory, child, includes, entries);
 		}
+	}
+
+	private static bool IsEntryEditorOnly(UhtClass classObj, UhtFunction function)
+	{
+		// A UFUNCTION is editor-only either when it sits inside a WITH_EDITOR / WITH_EDITORONLY_DATA
+		// block (UHT records this in DefineScope) or when it carries the FUNC_EditorOnly flag.
+		// The enclosing class can also be editor-only as a whole.
+		if (function.DefineScope.HasAnyFlags(UhtDefineScope.EditorOnlyData))
+		{
+			return true;
+		}
+
+		if (classObj.DefineScope.HasAnyFlags(UhtDefineScope.EditorOnlyData))
+		{
+			return true;
+		}
+
+		if (function.FunctionFlags.ToString().Contains("EditorOnly", StringComparison.Ordinal))
+		{
+			return true;
+		}
+
+		return false;
 	}
 
 	private static bool ShouldGenerate(UhtClass classObj, UhtFunction function)
