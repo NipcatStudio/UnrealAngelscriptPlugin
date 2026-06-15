@@ -1852,13 +1852,18 @@ void FAngelscriptEngine::Initialize_AnyThread()
 	}
 #endif
 
+	// The shared state (which owns the bind database) must exist before loading Binds.Cache.
+	// Otherwise FAngelscriptBindDatabase::Get() falls back to a throwaway static instance, the
+	// loaded data lands there, and the cooked type-registration binds read the engine's empty
+	// database -> every UCLASS/UStruct ends up "not a data type" in packaged builds.
+	EnsureSharedStateCreated();
 #if AS_USE_BIND_DB
 	{
 		AS_PERF_SCOPE_STARTUP_BIND_DATABASE();
 		FAngelscriptScopeTimer Timer(TEXT("load bind database"));
 		FAngelscriptBindDatabase::Get().Load(GetScriptRootDirectory() / TEXT("Binds.Cache"), bGeneratePrecompiledData);
 	}
-#endif	
+#endif
 	//WILL-EDIT
 	TSharedPtr<IPlugin> plugin = IPluginManager::Get().FindPlugin("Angelscript");		
 
