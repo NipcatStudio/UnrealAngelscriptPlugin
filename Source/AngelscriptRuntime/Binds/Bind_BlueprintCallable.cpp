@@ -179,6 +179,12 @@ void BindBlueprintCallable(
 	const bool bHasDirectNativePointer = DirectNativePointer != nullptr && DirectNativePointer->IsBound();
 	if (!bHasDirectNativePointer)
 	{
+#if AS_USE_BIND_DB
+		// InitFromDB(bInitTypes=false) above left ArgumentTypes empty and bAllTypesValid=false for
+		// the direct-bind fast path. The reflection fallback needs real arg types + a valid flag, so
+		// populate them from reflection now. Only reached for stub/ERASE_NO_FUNCTION methods in cooked.
+		Signature.InitTypesFromReflection();
+#endif
 		if (!BindBlueprintCallableReflectionFallback(InType, Function, Signature, *Entry))
 			return;
 

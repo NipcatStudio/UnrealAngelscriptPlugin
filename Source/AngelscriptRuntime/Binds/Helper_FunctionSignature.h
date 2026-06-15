@@ -468,6 +468,44 @@ struct FAngelscriptFunctionSignature
 		}
 	}
 
+	// Populate ArgumentTypes/ReturnType from UE reflection and set bAllTypesValid.
+	// Needed in cooked (AS_USE_BIND_DB) builds before invoking the BlueprintCallable
+	// reflection fallback: InitFromDB(bInitTypes=false) intentionally leaves these empty
+	// (and bAllTypesValid=false) for the direct-bind fast path, but the reflection fallback
+	// bails on !bAllTypesValid, so stub/ERASE_NO_FUNCTION methods (e.g. UBoxComponent::SetBoxExtent)
+	// would never bind without this. Mirrors InitFromDB's bInitTypes branch. Returns bAllTypesValid.
+	bool InitTypesFromReflection()
+	{
+		ArgumentTypes.Reset();
+		ArgumentNames.Reset();
+		ReturnType = FAngelscriptTypeUsage();
+		bAllTypesValid = true;
+
+		for (TFieldIterator<FProperty> It(Function); It && (It->PropertyFlags & CPF_Parm); ++It)
+		{
+			FProperty* Property = *It;
+			FAngelscriptTypeUsage Type = FAngelscriptTypeUsage::FromProperty(Property);
+
+			if (!Type.IsValid())
+			{
+				bAllTypesValid = false;
+				break;
+			}
+
+			if (Property->PropertyFlags & CPF_ReturnParm)
+			{
+				ReturnType = Type;
+			}
+			else
+			{
+				ArgumentTypes.Add(Type);
+				ArgumentNames.Add(Property->GetName());
+			}
+		}
+
+		return bAllTypesValid;
+	}
+
 	void WriteToDB(FAngelscriptMethodBind& DBBind)
 	{
 		DBBind.Declaration = Declaration;
