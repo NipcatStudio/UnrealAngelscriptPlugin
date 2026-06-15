@@ -579,6 +579,8 @@ int FAngelscriptBinds::CompileOutInTest(int FunctionId)
 {
 	auto& Manager = FAngelscriptEngine::Get();
 	auto* Function = (asCScriptFunction*)Manager.Engine->GetFunctionById(FunctionId);
+	if (Function == nullptr)
+		return FunctionId;
 
 	if (UE_BUILD_TEST || UE_BUILD_SHIPPING || (WITH_EDITOR && FAngelscriptEngine::IsSimulatingCookedForCurrentContext()))
 	{
@@ -597,6 +599,8 @@ int FAngelscriptBinds::CompileOutIfNoLog(int FunctionId)
 {
 	auto& Manager = FAngelscriptEngine::Get();
 	auto* Function = (asCScriptFunction*)Manager.Engine->GetFunctionById(FunctionId);
+	if (Function == nullptr)
+		return FunctionId;
 
 	if (UE_BUILD_TEST || UE_BUILD_SHIPPING || (WITH_EDITOR && FAngelscriptEngine::IsSimulatingCookedForCurrentContext()))
 	{
@@ -615,6 +619,8 @@ int FAngelscriptBinds::CompileOutAsEnsure(int FunctionId)
 {
 	auto& Manager = FAngelscriptEngine::Get();
 	auto* Function = (asCScriptFunction*)Manager.Engine->GetFunctionById(FunctionId);
+	if (Function == nullptr)
+		return FunctionId;
 	Function->traits.SetTrait(asTRAIT_NODISCARD, true);
 
 	if (UE_BUILD_SHIPPING || (WITH_EDITOR && FAngelscriptEngine::IsSimulatingCookedForCurrentContext()))
@@ -628,6 +634,8 @@ int FAngelscriptBinds::CompileOutAsCheck(int FunctionId)
 {
 	auto& Manager = FAngelscriptEngine::Get();
 	auto* Function = (asCScriptFunction*)Manager.Engine->GetFunctionById(FunctionId);
+	if (Function == nullptr)
+		return FunctionId;
 
 	if (UE_BUILD_SHIPPING || (WITH_EDITOR && FAngelscriptEngine::IsSimulatingCookedForCurrentContext()))
 	{
@@ -648,7 +656,8 @@ int FAngelscriptBinds::CompileReplaceWithFirstArgInTest(int FunctionId)
 	{
 		auto& Manager = FAngelscriptEngine::Get();
 		auto* Function = (asCScriptFunction*)Manager.Engine->GetFunctionById(FunctionId);
-		Function->compileOutType = asECompileOutType::ReplaceWithFirstParam;
+		if (Function != nullptr)
+			Function->compileOutType = asECompileOutType::ReplaceWithFirstParam;
 	}
 	return FunctionId;
 }
@@ -657,6 +666,8 @@ void FAngelscriptBinds::CompileOutPreviousBind()
 {
 	auto& Manager = FAngelscriptEngine::Get();
 	auto* Function = (asCScriptFunction*)Manager.Engine->GetFunctionById(GetPreviouslyBoundFunctionRef());
+	if (Function == nullptr)
+		return;
 	Function->compileOutType = asECompileOutType::CompileOutEntirely;
 }
 
@@ -664,6 +675,8 @@ void FAngelscriptBinds::CompileOutPreviousBindAsMethodChain()
 {
 	auto& Manager = FAngelscriptEngine::Get();
 	auto* Function = (asCScriptFunction*)Manager.Engine->GetFunctionById(GetPreviouslyBoundFunctionRef());
+	if (Function == nullptr)
+		return;
 	Function->compileOutType = asECompileOutType::CompileOutAsMethodChain;
 }
 
